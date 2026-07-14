@@ -160,7 +160,7 @@
           <div class="hint">One per line or comma-separated. Wrap a value in "quotes" if it contains a comma.</div>
 
           <div class="search-controls">
-            <button type="submit" class="rbtn primary"><i class="ti ti-search" aria-hidden="true"></i> Search</button>
+            <button type="button" class="rbtn primary" onclick="doSearch()"><i class="ti ti-search" aria-hidden="true"></i> Search</button>
             <select name="mode" class="c-select" title="Match mode">
               <option value="exact"   {% if (form_mode or selected.default_match_mode) == 'exact'   %}selected{% endif %}>Exact</option>
               <option value="partial" {% if (form_mode or selected.default_match_mode) == 'partial' %}selected{% endif %}>Partial</option>
@@ -1639,6 +1639,9 @@ document.addEventListener('DOMContentLoaded', function() {
     panel.setAttribute('data-total', r.total_matches);
     panel.setAttribute('data-view', r.view);
     panel.setAttribute('data-primary-group', r.primary_group_key);
+    _currentGroupKey = r.primary_group_key;
+    _tableEnhanced = false;
+    _cardsLaidOut = false;
 
     // Remove old result content (keep progress div)
     Array.prototype.forEach.call(panel.querySelectorAll('.res-head,.group-block,.empty-results,.nf-panel'), function(el) { el.remove(); });
@@ -1828,7 +1831,6 @@ document.addEventListener('DOMContentLoaded', function() {
         function processChunk() {
           return reader.read().then(function(chunk) {
             buffer += chunk.done ? '' : decoder.decode(chunk.value, { stream: true });
-            // Split on double-newline; last element may be incomplete
             var parts = buffer.split('\n\n');
             buffer = chunk.done ? '' : parts.pop();
             parts.forEach(handleEvent);
@@ -1871,7 +1873,17 @@ document.addEventListener('DOMContentLoaded', function() {
       });
   }
 
-  // Intercept form submit
+  // Expose globally for the Search button onclick and Enter-key
+  window.doSearch = ajaxSearch;
+
+  // Enter key in search textareas triggers search
+  document.querySelectorAll('#search-form textarea, #search-form input[type="text"]').forEach(function(el) {
+    el.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); ajaxSearch(); }
+    });
+  });
+
+  // Fallback: intercept native form submit (e.g. implicit submission)
   var searchForm = document.getElementById('search-form');
   if (searchForm) {
     searchForm.addEventListener('submit', function(e) {
