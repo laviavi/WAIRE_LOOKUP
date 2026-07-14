@@ -117,8 +117,8 @@ def test_deep_link_prefill_and_auto_run(clean_env):
     html = rv.data.decode("utf-8")
     assert ">abc</textarea>" in html
     assert 'selected>Partial' in html
-    assert "f.submit()" not in html  # no run=1 -> no auto-run snippet
+    assert "replaceState" not in html  # no run=1 -> no auto-run snippet
 
     rv2 = client.get("/?template=ac&key_0=abc&mode=partial&run=1")
     html2 = rv2.data.decode("utf-8")
-    assert "f.submit()" in html2
+    assert "replaceState" in html2  # auto-run block present

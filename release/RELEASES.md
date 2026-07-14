@@ -18,6 +18,7 @@ which move per code change — each release records which internals it bundled.
 
 | Release | Date       | App (Server / UI) | Notes |
 |---------|------------|-------------------|-------|
+| v1.3.1  | 2026-07-14 | 1.17.2 / 2.23.0   | AJAX search with SSE progress bar, parquet cache + preload, auto-install deps in run.bat. |
 | v1.3.0  | 2026-07-14 | 1.17.0 / 2.22.0   | M1–M11: DPAPI token cache, vendored icons, template export/import, update checker, not-found report, pagination, cross-search, quick filter, Teams notifications, log viewer, auth test. |
 | v1.2.0  | 2026-07-12 | 1.16.1 / 2.21.1   | Send-to (Outlook/Excel/Teams) + deep links, SQL Server sources, multi-sheet views, autocomplete. |
 | v1.1.2  | 2026-07-11 | 1.10.0 / 2.14.0   | Zero-setup SharePoint via well-known Microsoft public Client ID. |
@@ -26,6 +27,15 @@ which move per code change — each release records which internals it bundled.
 | v1.0.0  | 2026-07-09 | 1.2.0 / 2.2.0     | First portable Windows build. |
 
 ---
+
+## v1.3.1 — 2026-07-14  (app: Server 1.17.2 / UI 2.23.0)
+Performance and UX release.
+- **AJAX search with SSE progress bar** — search runs via `POST /api/search` streaming real-time stage updates (Loading source → Searching N rows → Rendering results). Client-side result rendering from JSON.
+- **Parquet cache + startup preload** — parsed Excel DataFrames cached as parquet files (~50-100× faster repeat loads). All file-based templates preloaded at startup.
+- **Auto-install dependencies** — `run.bat` checks for Flask on first run and installs from `requirements.txt` if missing.
+- Fixed: removed invalid `pythoncom` from requirements.txt (bundled in pywin32).
+- Fixed: "Working outside of request context" error in SSE search.
+- 174 tests passing.
 
 ## v1.3.0 — 2026-07-14  (app: Server 1.17.0 / UI 2.22.0)
 Feature release: all 11 roadmap modules (M1–M11).

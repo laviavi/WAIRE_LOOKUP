@@ -12,7 +12,7 @@ from pathlib import Path
 
 import openpyxl
 import pandas as pd
-from flask import Flask, jsonify, redirect, render_template, request, send_file, session, url_for
+from flask import Flask, Response, jsonify, redirect, render_template, request, send_file, session, stream_with_context, url_for
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -426,6 +426,194 @@ def do_search():
         form_mode=mode,
         search_summary=_search_summary(selected),
     )
+
+
+@app.route("/api/search", methods=["POST"])
+def api_search():
+    """SSE stream: emits status events during search, then the final JSON result."""
+    template_name = request.form.get("template", "")
+    mode = request.form.get("mode", "exact")
+    force_reload = request.form.get("force_reload") == "1"
+    auto_check = session.get("auto_check", False)
+
+    key_raw: list[str] = []
+    for i in range(20):
+        v = request.form.get(f"key_{i}")
+        if v is None:
+            break
+        key_raw.append(v)
+
+    # Read/clear session-based snapshots BEFORE entering the generator,
+    # because Flask commits the session cookie with the response headers
+    # (before generator yields run).
+    old_sids = session.pop("snapshot_ids", None) or {}
+    legacy_sid = session.pop("snapshot_id", None)
+    if legacy_sid:
+        old_sids["_legacy"] = legacy_sid
+
+    def generate():
+        def _evt(event, data):
+            return f"event: {event}\ndata: {json.dumps(data)}\n\n"
+
+        try:
+            template = load_template(template_name)
+            if not template:
+                yield _evt("error", {"message": f"Template '{template_name}' not found."})
+                return
+
+            key_columns = template["key_columns"]
+            labels = template.get("labels", {})
+            column_queries: list[tuple[str, list[str]]] = []
+            for i, col in enumerate(key_columns):
+                raw = key_raw[i] if i < len(key_raw) else ""
+                vals = parse_values(raw)
+                if vals:
+                    column_queries.append((col, vals))
+
+            groups = group_views_by_source(template)
+            src_name = template.get("source", {}).get("name") or template.get("source", {}).get("path") or template_name
+
+            for sid in old_sids.values():
+                if sid:
+                    snapshot_store.delete_snapshot(sid)
+
+            new_snapshot_ids: dict[str, str] = {}
+            group_results: list[dict] = []
+            primary_source = None
+            primary_warnings: list[str] = []
+
+            t0 = time.monotonic()
+            for gi, group in enumerate(groups):
+                source = _get_view_group_source(template, group)
+                if group.is_primary:
+                    primary_source = source
+
+                needs_load = force_reload or (auto_check and source.is_stale()) or source.dataframe is None
+                if needs_load:
+                    yield _evt("status", {"stage": "loading", "detail": f"Loading {src_name}…"})
+                    source.load()
+
+                yield _evt("status", {"stage": "searching", "detail": f"Searching {len(source.dataframe):,} rows…"})
+
+                df = source.dataframe.copy()
+                df = _apply_default_filter(df, template)
+
+                missing_keys = [c for c in key_columns if c not in df.columns]
+                if missing_keys:
+                    group_results.append({
+                        "group_key": group.key, "sheet_name": group.sheet_name,
+                        "table_name": group.table_name, "is_primary": group.is_primary,
+                        "views": group.views,
+                        "disabled_reason": f"sheet '{group.sheet_name or '(default)'}' has no " + ", ".join(f"'{c}'" for c in missing_keys) + " column",
+                        "display_rows": [], "all_view_cols": [], "total_matches": 0,
+                        "not_found": [], "truncated": False,
+                        "source_timestamp": source.source_timestamp().strftime("%Y-%m-%d %H:%M:%S"),
+                    })
+                    continue
+
+                sr = search(df, column_queries, mode, limit=SEARCH_RESULT_CAP)
+
+                group_all_cols: list[str] = []
+                seen: set[str] = set()
+                for v in group.views:
+                    for c in v["columns"]:
+                        if c not in seen:
+                            group_all_cols.append(c)
+                            seen.add(c)
+
+                display_rows = sr.rows.copy()
+                for c in group_all_cols:
+                    if c not in display_rows.columns:
+                        display_rows[c] = ""
+                display_rows = display_rows[group_all_cols + ["_matched_on", "_duplicate"]]
+
+                sid = snapshot_store.save_snapshot(
+                    sr.full_rows, template_name=f"{template_name}__{group.key}",
+                    result_columns=group_all_cols, not_found=sr.not_found,
+                )
+                new_snapshot_ids[group.key] = sid
+
+                rows_json = []
+                for _, row in display_rows.iterrows():
+                    r = {c: row[c] for c in group_all_cols}
+                    r["_matched_on"] = row["_matched_on"]
+                    r["_duplicate"] = bool(row["_duplicate"])
+                    rows_json.append(r)
+
+                group_results.append({
+                    "group_key": group.key, "sheet_name": group.sheet_name,
+                    "table_name": group.table_name, "is_primary": group.is_primary,
+                    "views": group.views, "disabled_reason": None,
+                    "display_rows": rows_json, "all_view_cols": group_all_cols,
+                    "total_matches": sr.total_matches, "not_found": sr.not_found,
+                    "truncated": sr.truncated,
+                    "source_timestamp": source.source_timestamp().strftime("%Y-%m-%d %H:%M:%S"),
+                })
+
+                if group.is_primary:
+                    primary_warnings = validate_template(template, source.columns())
+
+            duration_ms = int((time.monotonic() - t0) * 1000)
+
+            primary_result = next(
+                (g for g in group_results if g["is_primary"] and g["disabled_reason"] is None), None,
+            )
+            log.log_search(
+                template_name=template_name, mode=mode,
+                value_count=len(column_queries),
+                match_count=primary_result["total_matches"] if primary_result else 0,
+                not_found=primary_result["not_found"] if primary_result else [],
+                duration_ms=duration_ms,
+            )
+
+            session["snapshot_ids"] = new_snapshot_ids
+
+            card_max = load_settings()["card_max"]
+            primary_total = primary_result["total_matches"] if primary_result else 0
+            view = "cards" if 0 < primary_total <= card_max else "table"
+
+            overall_not_found = primary_result["not_found"] if primary_result else []
+            overall_truncated = any(g.get("truncated") for g in group_results)
+
+            primary_group = next((g for g in group_results if g["is_primary"]), group_results[0])
+
+            views_flat = []
+            for g in group_results:
+                for v in g["views"]:
+                    views_flat.append({**v, "group_key": g["group_key"]})
+
+            result_data = {
+                "groups": group_results,
+                "primary_group_key": primary_group["group_key"],
+                "views": views_flat,
+                "labels": labels,
+                "total_matches": primary_total,
+                "not_found": overall_not_found,
+                "truncated": overall_truncated,
+                "queried_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "source_timestamp": (
+                    primary_source.source_timestamp().strftime("%Y-%m-%d %H:%M:%S")
+                    if primary_source else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                ),
+                "view": view,
+                "duration_ms": duration_ms,
+            }
+
+            key_col_header = key_columns[0] if len(key_columns) == 1 else "Match"
+
+            yield _evt("status", {"stage": "rendering", "detail": "Rendering results…"})
+            yield _evt("result", {
+                "result": result_data,
+                "warnings": primary_warnings,
+                "key_col_header": key_col_header,
+                "template_name": template_name,
+            })
+
+        except Exception as e:
+            yield _evt("error", {"message": friendly_read_error(e)})
+
+    return Response(stream_with_context(generate()), mimetype="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.route("/refresh", methods=["POST"])

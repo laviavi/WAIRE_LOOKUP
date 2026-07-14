@@ -103,7 +103,7 @@ python app.py            # or run.bat (opens browser + starts server)
 - `version.py`: bump `SERVER_VERSION` for backend changes, `UI_VERSION` for template/CSS/JS changes.
 - Add a line to `waire_lookup/CHANGELOG.md`.
 - Both versions render in the app footer status bar.
-- Current: Server 1.17.0 · UI 2.22.0.
+- Current: Server 1.17.2 · UI 2.23.0.
 
 ---
 

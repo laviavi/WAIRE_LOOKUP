@@ -3,6 +3,9 @@
 Versions are tracked in `version.py`. Bump **Server** for backend changes,
 **UI** for frontend changes, and add a line here for every iteration.
 
+## Server v1.17.2 · UI v2.23.0 — 2026-07-14
+- **AJAX search with SSE progress bar.** Search now runs via `POST /api/search` with server-sent events streaming real-time stage updates (Loading source → Searching N rows → Rendering results). Progress bar with indeterminate animation while working. Results rendered client-side from JSON. Fixed session context error by moving session reads out of the streaming generator. Removed invalid `pythoncom` entry from requirements.txt.
+
 ## Server v1.17.1 — 2026-07-14
 - **Parquet cache + preload.** Excel sources are cached as local parquet files after first parse (~50-100x faster on repeat loads). All file-based templates are preloaded in a background thread at startup so the first search is instant.
 

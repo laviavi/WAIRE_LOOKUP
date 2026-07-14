@@ -186,7 +186,11 @@
 
     <div class="panel-resize-handle" id="panel-divider" title="Drag to resize"></div>
 
-    <div class="results" data-total="{{ result.total_matches if result else 0 }}" data-view="{{ result.view if result else '' }}" data-primary-group="{{ result.primary_group_key if result else '' }}">
+    <div class="results" id="results-panel" data-total="{{ result.total_matches if result else 0 }}" data-view="{{ result.view if result else '' }}" data-primary-group="{{ result.primary_group_key if result else '' }}">
+      <div id="search-progress" class="search-progress">
+        <div class="progress-bar-track"><div id="progress-fill" class="progress-bar-fill indeterminate"></div></div>
+        <div id="progress-status" class="progress-status">Preparing…</div>
+      </div>
       {% if result %}
         <div class="res-head">
           <span class="res-count">{{ result.total_matches }} match{{ 'es' if result.total_matches != 1 else '' }}</span>
@@ -1612,13 +1616,277 @@ document.addEventListener('DOMContentLoaded', function() {
     reader.readAsText(file);
   }
 
+  // ── AJAX search with SSE progress ───────────────────────────────────────
+  function _showProgress(msg) {
+    var el = document.getElementById('search-progress');
+    el.classList.add('active');
+    document.getElementById('progress-status').textContent = msg || 'Preparing…';
+    // hide existing results / empty state while searching
+    var panel = document.getElementById('results-panel');
+    Array.prototype.forEach.call(panel.children, function(c) {
+      if (c.id !== 'search-progress') c.style.display = 'none';
+    });
+  }
+  function _hideProgress() {
+    document.getElementById('search-progress').classList.remove('active');
+  }
+
+  function _renderResults(data) {
+    var r = data.result;
+    var labels = r.labels || {};
+    var kch = data.key_col_header;
+    var panel = document.getElementById('results-panel');
+    panel.setAttribute('data-total', r.total_matches);
+    panel.setAttribute('data-view', r.view);
+    panel.setAttribute('data-primary-group', r.primary_group_key);
+
+    // Remove old result content (keep progress div)
+    Array.prototype.forEach.call(panel.querySelectorAll('.res-head,.group-block,.empty-results,.nf-panel'), function(el) { el.remove(); });
+    var oldFoot = document.querySelector('.res-foot');
+    if (oldFoot) oldFoot.remove();
+
+    if (r.total_matches === 0 && !r.groups.length) {
+      panel.innerHTML += '<div class="empty-results"><i class="ti ti-search-off" aria-hidden="true"></i><p>No matches.</p></div>';
+      _hideProgress();
+      return;
+    }
+
+    // res-head
+    var head = document.createElement('div');
+    head.className = 'res-head';
+    var countSpan = '<span class="res-count">' + r.total_matches + ' match' + (r.total_matches !== 1 ? 'es' : '') + '</span>';
+    var viewTabs = '';
+    if (r.views.length > 1) {
+      viewTabs = '<span class="view-switcher">';
+      r.views.forEach(function(v, i) {
+        viewTabs += '<button type="button" class="view-tab' + (i === 0 ? ' active' : '') + '" data-view-idx="' + i + '" data-group-key="' + _escHtml(v.group_key) + '" onclick="switchView(' + i + ')">' + _escHtml(v.name) + '</button>';
+      });
+      viewTabs += '</span>';
+    }
+    var nfChip = '';
+    if (r.not_found && r.not_found.length) {
+      nfChip = '<span class="chip nf-toggle" onclick="document.getElementById(\'nf-panel\').style.display = document.getElementById(\'nf-panel\').style.display === \'none\' ? \'\' : \'none\'" style="cursor:pointer" title="Click to expand">' + r.not_found.length + ' not found</span>';
+    }
+    var truncChip = r.truncated ? '<span class="chip info">showing first 50 — export for all</span>' : '';
+    var filterHtml = '<span class="filter-wrap"><input type="text" id="quick-filter" class="quick-filter" placeholder="Filter…" autocomplete="off" oninput="applyQuickFilter(this.value)"><span id="filter-count" class="filter-count"></span></span>';
+    head.innerHTML = countSpan + viewTabs + nfChip + truncChip + filterHtml;
+    panel.appendChild(head);
+
+    // not-found panel
+    if (r.not_found && r.not_found.length) {
+      var nfDiv = document.createElement('div');
+      nfDiv.id = 'nf-panel'; nfDiv.className = 'nf-panel'; nfDiv.style.display = 'none';
+      nfDiv.innerHTML = '<div class="nf-head">' + r.not_found.length + ' value' + (r.not_found.length !== 1 ? 's' : '') + ' not found <button type="button" class="rbtn" onclick="var t=document.getElementById(\'nf-list\').innerText; navigator.clipboard.writeText(t).then(function(){showToast(\'Copied.\')});" title="Copy list"><i class="ti ti-copy" aria-hidden="true"></i> Copy list</button></div><pre id="nf-list" class="nf-list">' + r.not_found.map(_escHtml).join('\n') + '</pre>';
+      panel.appendChild(nfDiv);
+    }
+
+    // groups
+    r.groups.forEach(function(g) {
+      var block = document.createElement('div');
+      block.className = 'group-block';
+      block.setAttribute('data-group-key', g.group_key);
+      block.setAttribute('data-group-total', g.total_matches);
+      if (!g.is_primary) block.style.display = 'none';
+
+      if (g.disabled_reason) {
+        block.innerHTML = '<div class="empty-results"><i class="ti ti-alert-circle" aria-hidden="true"></i><p>This view is not searchable — ' + _escHtml(g.disabled_reason) + '.</p></div>';
+      } else if (g.total_matches === 0) {
+        block.innerHTML = '<div class="empty-results"><i class="ti ti-search-off" aria-hidden="true"></i><p>No matches in this view.</p></div>';
+      } else {
+        var rows = g.display_rows || [];
+        var cols = g.all_view_cols || [];
+
+        // cards
+        var cardDiv = document.createElement('div');
+        cardDiv.className = 'card-view card-canvas';
+        if (r.view !== 'cards') cardDiv.style.display = 'none';
+        rows.forEach(function(row, ri) {
+          var card = document.createElement('div');
+          card.className = 'record-card' + (row._duplicate ? ' dup' : '');
+          card.setAttribute('data-cid', g.group_key + '::' + ri);
+          card.setAttribute('data-title', row._matched_on);
+          card.setAttribute('data-matched', row._matched_on);
+          var headHtml = '<div class="rc-head"><span class="rc-title" title="' + _escHtml(row._matched_on) + '">' + _escHtml(row._matched_on) + (row._duplicate ? ' <span class="rc-dup">dup</span>' : '') + '</span><span class="rc-active-badge">Active</span><span class="rc-actions"><button type="button" class="rc-collapse" title="Collapse / expand card" aria-label="Collapse card"><i class="ti ti-chevron-up" aria-hidden="true"></i></button><button type="button" class="rc-copy" title="Copy card" aria-label="Copy card"><i class="ti ti-copy" aria-hidden="true"></i></button><button type="button" class="rc-close" title="Close card" aria-label="Close card">×</button></span></div>';
+          var bodyHtml = '';
+          cols.forEach(function(c) {
+            var label = labels[c] || c;
+            bodyHtml += '<div class="rc-row" data-col="' + _escHtml(c) + '"><div class="rc-k">' + _escHtml(label) + '</div><div class="rc-v">' + _escHtml(row[c] || '') + '</div></div>';
+          });
+          card.innerHTML = headHtml + bodyHtml;
+          cardDiv.appendChild(card);
+        });
+        block.appendChild(cardDiv);
+
+        // table
+        var tableDiv = document.createElement('div');
+        tableDiv.className = 'table-view table-scroll';
+        if (r.view === 'cards') tableDiv.style.display = 'none';
+        var tbl = '<table class="tbl results-table" data-template="' + _escHtml(data.template_name) + '" data-group-key="' + _escHtml(g.group_key) + '"><thead><tr><th class="mo-col">' + _escHtml(kch) + '</th>';
+        cols.forEach(function(c) { tbl += '<th data-col="' + _escHtml(c) + '">' + _escHtml(labels[c] || c) + '</th>'; });
+        tbl += '</tr></thead><tbody>';
+        rows.forEach(function(row, ri) {
+          var mo = row._matched_on || '';
+          var moDisplay = mo;
+          if (cols.length && mo.indexOf(' = ') >= 0) { var parts = mo.split(' = '); if (parts.length === 2) moDisplay = parts[1]; }
+          tbl += '<tr class="' + (row._duplicate ? 'dup' : '') + '" data-cid="' + g.group_key + '::' + ri + '"><td class="mo-col" title="' + _escHtml(mo) + '">' + _escHtml(moDisplay) + '</td>';
+          cols.forEach(function(c) { tbl += '<td data-col="' + _escHtml(c) + '" title="' + _escHtml(row[c] || '') + '">' + _escHtml(row[c] || '') + '</td>'; });
+          tbl += '</tr>';
+        });
+        tbl += '</tbody></table>';
+        tableDiv.innerHTML = tbl;
+        block.appendChild(tableDiv);
+
+        if (g.truncated) {
+          var smDiv = document.createElement('div');
+          smDiv.className = 'show-more-wrap';
+          smDiv.innerHTML = '<button type="button" class="rbtn show-more-btn" data-group-key="' + _escHtml(g.group_key) + '" data-offset="' + rows.length + '" onclick="loadMoreRows(this)">Show 50 more (' + g.total_matches + ' total)</button>';
+          block.appendChild(smDiv);
+        }
+      }
+      panel.appendChild(block);
+    });
+
+    // footer
+    var foot = document.createElement('div');
+    foot.className = 'res-foot';
+    foot.innerHTML = '<span>Queried at: ' + _escHtml(r.queried_at) + '</span><span title="When the source file was last modified">Source file updated at: ' + _escHtml(r.source_timestamp) + '</span>';
+    panel.parentNode.insertBefore(foot, panel.nextSibling);
+
+    _hideProgress();
+    applyResultsView();
+    _initCardActions();
+    _initFoundList();
+    if (typeof enhanceResultsTable === 'function') {
+      panel.querySelectorAll('.results-table').forEach(enhanceResultsTable);
+    }
+  }
+
+  function _initCardActions() {
+    document.querySelectorAll('.record-card').forEach(function(card) {
+      card.querySelector('.rc-collapse').addEventListener('click', function(e) {
+        e.stopPropagation();
+        card.classList.toggle('collapsed');
+        var icon = this.querySelector('i');
+        if (icon) { icon.className = card.classList.contains('collapsed') ? 'ti ti-chevron-down' : 'ti ti-chevron-up'; }
+      });
+      card.querySelector('.rc-copy').addEventListener('click', function(e) {
+        e.stopPropagation();
+        var lines = [];
+        card.querySelectorAll('.rc-row').forEach(function(r) {
+          lines.push(r.querySelector('.rc-k').textContent + ': ' + r.querySelector('.rc-v').textContent);
+        });
+        navigator.clipboard.writeText(lines.join('\n')).then(function(){ showToast('Copied.'); });
+      });
+      card.querySelector('.rc-close').addEventListener('click', function(e) {
+        e.stopPropagation(); card.style.display = 'none';
+      });
+      card.addEventListener('click', function(e) {
+        if (e.target.closest('.rc-actions')) return;
+        selectCard(card.getAttribute('data-cid'), e.ctrlKey || e.metaKey);
+      });
+    });
+    document.querySelectorAll('.results-table tbody tr').forEach(function(tr) {
+      tr.addEventListener('click', function(e) {
+        selectCard(tr.getAttribute('data-cid'), e.ctrlKey || e.metaKey);
+      });
+    });
+  }
+
+  function _initFoundList() {
+    var list = document.getElementById('found-list');
+    var countEl = document.getElementById('found-count');
+    if (!list) return;
+    list.innerHTML = '';
+    var cards = document.querySelectorAll('.record-card[data-cid]');
+    cards.forEach(function(card) {
+      var li = document.createElement('li');
+      li.className = 'found-item';
+      li.textContent = card.getAttribute('data-title') || '';
+      li.setAttribute('data-cid', card.getAttribute('data-cid'));
+      li.addEventListener('click', function(e) {
+        selectCard(card.getAttribute('data-cid'), e.ctrlKey || e.metaKey);
+        card.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+      });
+      list.appendChild(li);
+    });
+    if (countEl) countEl.textContent = '(' + cards.length + ')';
+  }
+
+  function ajaxSearch() {
+    var form = document.getElementById('search-form');
+    if (!form) return;
+    _showProgress('Preparing…');
+    var formData = new FormData(form);
+
+    fetch('/api/search', { method: 'POST', body: new URLSearchParams(formData) })
+      .then(function(response) {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = '';
+
+        function processChunk() {
+          return reader.read().then(function(chunk) {
+            buffer += chunk.done ? '' : decoder.decode(chunk.value, { stream: true });
+            // Split on double-newline; last element may be incomplete
+            var parts = buffer.split('\n\n');
+            buffer = chunk.done ? '' : parts.pop();
+            parts.forEach(handleEvent);
+            if (!chunk.done) return processChunk();
+          });
+        }
+
+        function handleEvent(block) {
+          if (!block.trim()) return;
+          var eventType = 'message', data = '';
+          block.split('\n').forEach(function(line) {
+            if (line.indexOf('event: ') === 0) eventType = line.slice(7);
+            else if (line.indexOf('data: ') === 0) data = line.slice(6);
+          });
+          if (!data) return;
+          try { var parsed = JSON.parse(data); } catch(e) { return; }
+          if (eventType === 'status') {
+            document.getElementById('progress-status').textContent = parsed.detail || 'Working…';
+          } else if (eventType === 'result') {
+            _renderResults(parsed);
+          } else if (eventType === 'error') {
+            _hideProgress();
+            var panel = document.getElementById('results-panel');
+            Array.prototype.forEach.call(panel.children, function(c) {
+              if (c.id !== 'search-progress') c.style.display = '';
+            });
+            showToast(parsed.message || 'Search failed.');
+          }
+        }
+
+        return processChunk();
+      })
+      .catch(function(e) {
+        _hideProgress();
+        var panel = document.getElementById('results-panel');
+        Array.prototype.forEach.call(panel.children, function(c) {
+          if (c.id !== 'search-progress') c.style.display = '';
+        });
+        showToast('Search failed: ' + (e.message || e));
+      });
+  }
+
+  // Intercept form submit
+  var searchForm = document.getElementById('search-form');
+  if (searchForm) {
+    searchForm.addEventListener('submit', function(e) {
+      e.preventDefault();
+      ajaxSearch();
+    });
+  }
+
   {% if auto_run %}
   (function(){
     var f = document.getElementById('search-form');
     if (f) {
       var tpl = f.querySelector('input[name=template]').value;
       history.replaceState(null, '', location.pathname + '?template=' + encodeURIComponent(tpl));
-      f.submit();
+      ajaxSearch();
     }
   })();
   {% endif %}

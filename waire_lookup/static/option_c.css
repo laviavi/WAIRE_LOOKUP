@@ -521,6 +521,15 @@
 .filter-wrap { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .quick-filter { font-size: 12px; padding: 3px 8px; border: 1px solid #ccc; border-radius: 3px; width: 140px; }
 .filter-count { font-size: 11px; color: #888; white-space: nowrap; }
+
+/* Search progress bar */
+.search-progress { display: none; padding: 24px 20px; text-align: center; }
+.search-progress.active { display: block; }
+.progress-bar-track { width: 100%; max-width: 400px; height: 4px; background: #e5e7eb; border-radius: 2px; margin: 0 auto 12px; overflow: hidden; }
+.progress-bar-fill { height: 100%; width: 0; background: linear-gradient(90deg, #3b82f6, #60a5fa); border-radius: 2px; transition: width 0.3s ease; }
+.progress-bar-fill.indeterminate { width: 30%; animation: indeterminate 1.4s ease-in-out infinite; }
+@keyframes indeterminate { 0% { transform: translateX(-100%); width: 30%; } 50% { width: 40%; } 100% { transform: translateX(400%); width: 30%; } }
+.progress-status { font-size: 13px; color: #6b7280; margin-top: 4px; }
 /* Show-more button (M6) */
 .show-more-wrap { padding: 8px 12px; text-align: center; }
 
