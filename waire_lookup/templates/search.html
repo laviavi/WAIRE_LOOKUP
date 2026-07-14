@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Search — WAIRE Lookup{% endblock %}
+{% block content %}
+
+{# ── Standalone action forms (never nested) ── #}
+{% if selected %}
+<form method="POST" action="{{ url_for('do_refresh') }}"       id="refresh-form"  style="display:none">
+  <input type="hidden" name="template" value="{{ selected_name }}">
+</form>
+<form method="POST" action="{{ url_for('toggle_auto_check') }}" id="toggle-form"   style="display:none">
+  <input type="hidden" name="template" value="{{ selected_name }}">
+</form>
+<form method="POST" action="{{ url_for('template_delete', name=selected.name) }}" id="delete-form" style="display:none"
+      onsubmit="return confirm('Delete template \'{{ selected.name }}\'?')">
+</form>
+{% endif %}
+<form method="POST" action="{{ url_for('do_export') }}" id="export-form" style="display:none"></form>
+
+{# ── Main search panel ── #}
+<section class="search-panel">
+
+  <div class="form-row">
+    <label for="template-select">Template</label>
+    <select id="template-select" onchange="window.location.href='{{ url_for('index') }}?template='+encodeURIComponent(this.value)">
+      <option value="">— select a template —</option>
+      {% for t in templates %}
+        <option value="{{ t.name }}" {% if t.name == selected_name %}selected{% endif %}>{{ t.name }}</option>
+      {% endfor %}
+    </select>
+    {% if selected %}
+      <a href="{{ url_for('template_edit', name=selected.name) }}" class="btn-link">Edit</a>
+      <button type="button" class="btn-link danger" onclick="document.getElementById('delete-form').submit()">Delete</button>
+    {% endif %}
+  </div>
+
+  {% if warnings %}
+    <div class="banner warning">
+      {% for w in warnings %}<p>⚠ {{ w }}</p>{% endfor %}
+    </div>
+  {% endif %}
+
+  {% if selected %}
+  {% if search_summary %}
+  <p class="search-summary">{{ search_summary }}</p>
+  {% endif %}
+
+  {# ── The ONE search form — no other forms nested inside ── #}
+  <form method="POST" action="{{ url_for('do_search') }}" id="search-form">
+    <input type="hidden" name="template" value="{{ selected_name }}">
+
+    {% for col in selected.key_columns %}
+    <div class="form-row">
+      <label>{{ col }} <span class="hint">one per line or comma-separated;<br>use "quotes" if value contains a comma</span></label>
+      <textarea name="key_{{ loop.index0 }}" rows="3" autocomplete="off">{{ form_key_values[loop.index0] if loop.index0 < (form_key_values | length) else '' }}</textarea>
+    </div>
+    {% endfor %}
+
+    <div class="form-row">
+      <label for="mode">Match mode</label>
+      <select name="mode" id="mode">
+        <option value="exact"    {% if (form_mode or selected.default_match_mode) == 'exact'   %}selected{% endif %}>Exact</option>
+        <option value="partial"  {% if (form_mode or selected.default_match_mode) == 'partial' %}selected{% endif %}>Partial (substring)</option>
+      </select>
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn-primary">Search</button>
+      <button type="button" class="btn-secondary" onclick="document.getElementById('refresh-form').submit()">Refresh data</button>
+    </div>
+
+    <div class="freshness-toggle">
+      <label>
+        <input type="checkbox" onchange="document.getElementById('toggle-form').submit()" {% if auto_check %}checked{% endif %}>
+        <strong>Auto-check source for changes before each search</strong>
+      </label>
+      <p class="hint">When enabled, the app checks whether the source file changed before every search and reloads it if so. This can make searches noticeably slower on large workbooks. Leave this off unless you specifically need up-to-the-minute data.</p>
+    </div>
+  </form>
+  {% endif %}
+
+</section>
+
+{# ── Results ── #}
+{% if result %}
+<section class="results-panel">
+
+  {% if result.truncated %}
+    <div class="banner info">
+      Showing first 50 of {{ result.total_matches }} matches — export to get all rows.
+    </div>
+  {% endif %}
+
+  <div class="results-toolbar">
+    <span class="results-summary">
+      {{ result.total_matches }} match{{ 'es' if result.total_matches != 1 else '' }}
+      {% if result.not_found %}
+        &middot; {{ result.not_found | length }} value{{ 's' if result.not_found|length != 1 else '' }} not found:
+        <span class="not-found-list">{{ result.not_found | join(', ') }}</span>
+      {% endif %}
+      &middot; data as of {{ result.timestamp }}
+    </span>
+    <button type="button" class="btn-secondary" onclick="copyTableTSV()">Copy as TSV</button>
+    <button type="button" class="btn-secondary" onclick="document.getElementById('export-form').submit()">Export CSV</button>
+  </div>
+
+  <div class="table-scroll">
+    <table id="results-table">
+      <thead>
+        <tr>
+          {% for col in result.result_columns %}
+            <th>{{ result.labels.get(col, col) }}</th>
+          {% endfor %}
+          <th>Matched on</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for _, row in result.display_rows.iterrows() %}
+          <tr class="{{ 'duplicate-row' if row._duplicate else '' }}">
+            {% for col in result.result_columns %}
+              <td>{{ row[col] }}</td>
+            {% endfor %}
+            <td class="matched-on">{{ row._matched_on }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+</section>
+{% endif %}
+
+<script>
+function copyTableTSV() {
+  const table = document.getElementById('results-table');
+  if (!table) return;
+  const rows = Array.from(table.querySelectorAll('tr'));
+  const tsv = rows.map(r =>
+    Array.from(r.querySelectorAll('th,td')).map(c => c.innerText.replace(/\t/g,' ')).join('\t')
+  ).join('\n');
+  navigator.clipboard.writeText(tsv).then(() => {
+    const btn = document.querySelector('button[onclick="copyTableTSV()"]');
+    if (btn) { const orig = btn.textContent; btn.textContent = 'Copied!'; setTimeout(() => btn.textContent = orig, 1500); }
+  });
+}
+</script>
+{% endblock %}

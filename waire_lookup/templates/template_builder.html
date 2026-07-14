@@ -1,0 +1,921 @@
+{% extends "base.html" %}
+{% block title %}Template Builder — WAIRE Lookup{% endblock %}
+{% block content %}
+
+<section class="builder-panel">
+  <h2>{{ 'Edit Template' if template else 'New Template' }}</h2>
+
+  <div id="error-banner" class="banner warning" style="display:none"></div>
+
+  <!-- Template name -->
+  <div class="form-row" style="align-items:center;gap:6px">
+    <label for="tpl-name">Template name</label>
+    <input type="text" id="tpl-name" autocomplete="off" placeholder="e.g. Facility PIN lookup"
+           value="{{ template.name if template else '' }}" style="flex:1">
+    {% if templates %}
+    <div class="tpl-picker-wrap" style="position:relative">
+      <button type="button" class="btn-secondary" onclick="toggleTplPicker()" title="Open another template">…</button>
+      <div id="tpl-picker" style="display:none;position:absolute;right:0;top:100%;background:#fff;border:1px solid #ccc;border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.12);z-index:200;min-width:200px;max-height:260px;overflow-y:auto">
+        {% for t in templates %}
+        <a class="tpl-picker-item{% if template and t.name == template.name %} current{% endif %}"
+           href="{{ url_for('template_edit', name=t.name) }}">{{ t.name }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── SOURCE ── -->
+  <fieldset>
+    <legend>Source</legend>
+
+    <div class="form-row">
+      <label>Source type</label>
+      <label class="chk"><input type="radio" name="src-type" value="local" onchange="onSourceTypeChange()"
+        {% if not template or (template.source.type or 'local') == 'local' %}checked{% endif %}> Local file</label>
+      <label class="chk"><input type="radio" name="src-type" value="sharepoint" onchange="onSourceTypeChange()"
+        {% if template and template.source.type == 'sharepoint' %}checked{% endif %}> SharePoint URL</label>
+      <label class="chk"><input type="radio" name="src-type" value="sql" onchange="onSourceTypeChange()"
+        {% if template and template.source.type == 'sql' %}checked{% endif %}> SQL Server</label>
+    </div>
+
+    <div class="form-row" id="local-source-row">
+      <label for="tpl-path">File path <span class="hint">(Excel or CSV)</span></label>
+      <input type="text" id="tpl-path" autocomplete="off"
+             placeholder="C:\Users\…\file.xlsx or file.csv"
+             value="{{ template.source.path if template else '' }}"
+             style="flex:1">
+      <button type="button" class="btn-secondary" onclick="browseFile()">Browse…</button>
+      <button type="button" class="btn-secondary" onclick="loadSheets()" title="Load the file at the path above">Load file</button>
+    </div>
+
+    <div class="form-row" id="sharepoint-source-row" style="display:none">
+      <label for="tpl-url">SharePoint URL <span class="hint">(paste a sharing link OR a direct file URL)</span></label>
+      <input type="text" id="tpl-url" autocomplete="off"
+             placeholder="https://contoso.sharepoint.com/..."
+             value="{{ template.source.url if template and template.source.type == 'sharepoint' else '' }}"
+             style="flex:1">
+      <button type="button" class="btn-secondary" onclick="connectSharePoint()">Connect &amp; load</button>
+    </div>
+    <input type="hidden" id="sp-drive-id" value="{{ template.source.drive_id if template and template.source.type == 'sharepoint' else '' }}">
+    <input type="hidden" id="sp-item-id" value="{{ template.source.item_id if template and template.source.type == 'sharepoint' else '' }}">
+    <input type="hidden" id="sp-name" value="{{ template.source.name if template and template.source.type == 'sharepoint' else '' }}">
+    <input type="hidden" id="sp-cache-path" value="">
+
+    <!-- ── SQL Server source ── -->
+    <div id="sql-source-row" style="display:none; margin-top:6px">
+      <div class="form-row">
+        <label for="sql-connection">Connection</label>
+        <select id="sql-connection" style="flex:1"><option value="">— none —</option></select>
+        <button type="button" class="btn-secondary" onclick="openSqlConnDialog()">+ New / manage</button>
+      </div>
+      <div class="form-row">
+        <label for="sql-query">Query</label>
+        <textarea id="sql-query" rows="6" spellcheck="false" autocomplete="off"
+                  style="flex:1; font-family: Consolas, 'Courier New', monospace; font-size:12px"
+                  placeholder="SELECT column1, column2 FROM dbo.some_table WHERE ...">{{ template.source.query if template and template.source.type == 'sql' else '' }}</textarea>
+      </div>
+      <div class="form-row">
+        <label></label>
+        <button type="button" class="btn-secondary" onclick="checkSqlQuery()">Check query</button>
+        <div id="sql-check-status" style="flex:1; margin-left:10px; font-size:12px"></div>
+      </div>
+    </div>
+
+    <!-- SQL connection manager dialog -->
+    <div id="sql-conn-dialog" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; align-items:center; justify-content:center">
+      <div style="background:#fff; border-radius:8px; width:520px; max-width:92vw; padding:16px; box-shadow:0 8px 32px rgba(0,0,0,0.2)">
+        <h3 style="margin:0 0 10px">SQL Server connections</h3>
+        <div id="sql-conn-list" style="margin-bottom:14px; font-size:12px"></div>
+        <fieldset style="border:1px solid #ddd; padding:10px 14px; border-radius:5px">
+          <legend style="font-size:12px; padding:0 6px">Add / edit connection</legend>
+          <input type="hidden" id="sql-conn-id" value="">
+          <div class="form-row"><label>Name</label><input type="text" id="sql-conn-name" style="flex:1" autocomplete="off" placeholder="e.g. isr_db_prod"></div>
+          <div class="form-row"><label>Server</label><input type="text" id="sql-conn-server" style="flex:1" autocomplete="off" placeholder="server.host.name or ip"></div>
+          <div class="form-row"><label>Port</label><input type="number" id="sql-conn-port" value="1433" style="width:90px"></div>
+          <div class="form-row"><label>Database</label><input type="text" id="sql-conn-database" style="flex:1" autocomplete="off"></div>
+          <div class="form-row"><label>Username</label><input type="text" id="sql-conn-username" style="flex:1" autocomplete="off"></div>
+          <div class="form-row"><label>Password</label><input type="password" id="sql-conn-password" style="flex:1" autocomplete="off" placeholder="(leave blank to keep existing)"></div>
+          <div id="sql-conn-status" style="font-size:12px; color:#b33; min-height:16px"></div>
+          <div class="form-row" style="margin-top:6px">
+            <button type="button" class="btn-secondary" onclick="saveSqlConnection()">Save</button>
+            <button type="button" class="btn-link" onclick="clearSqlConnForm()">Clear form</button>
+            <button type="button" class="btn-link" style="margin-left:auto" onclick="closeSqlConnDialog()">Close</button>
+          </div>
+        </fieldset>
+      </div>
+    </div>
+
+    <div id="sheet-row" class="form-row" style="display:none">
+      <label for="tpl-sheet">Sheet</label>
+      <select id="tpl-sheet" onchange="onSheetChange()"></select>
+    </div>
+
+    <div id="table-row" class="form-row" style="display:none">
+      <label for="tpl-table">Excel Table <span class="hint">(optional — overrides sheet)</span></label>
+      <select id="tpl-table" onchange="onTableChange()">
+        <option value="">— use full sheet —</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label for="tpl-header">Header row</label>
+      <input type="number" id="tpl-header" value="{{ template.source.header_row if template else 1 }}"
+             min="1" style="width:70px" autocomplete="off">
+      <span class="hint">Row number as shown in Excel (row 1 = first row)</span>
+      <button type="button" class="btn-link" onclick="loadColumns()" style="margin-left:8px">Reload columns</button>
+    </div>
+
+    <div id="load-status" class="hint" style="margin-top:6px;min-height:18px"></div>
+  </fieldset>
+
+  <!-- ── COLUMNS ── -->
+  <div id="columns-section" style="display:none">
+    <div class="columns-grid">
+      <fieldset>
+        <legend>Key columns <span class="hint">(used for lookup matching)</span></legend>
+        <div id="key-columns-list" class="column-checklist"></div>
+      </fieldset>
+    </div>
+
+    <!-- ── VIEWS ── -->
+    <fieldset style="margin-top:16px">
+      <legend>Views <span class="hint">(named subsets of result columns — add multiple to switch between them)</span></legend>
+      <div id="views-list"></div>
+      <button type="button" class="btn-secondary" style="margin-top:10px" onclick="addView()">+ Add view</button>
+    </fieldset>
+  </div>
+
+  <!-- ── SETTINGS ── -->
+  <div id="settings-section" style="display:none">
+    <fieldset>
+      <legend>Settings</legend>
+
+      <div class="form-row">
+        <label>Default match mode</label>
+        <select id="tpl-mode">
+          <option value="exact">Exact</option>
+          <option value="partial">Partial (substring)</option>
+        </select>
+      </div>
+
+      <div class="form-row">
+        <label for="tpl-filter-col">Default filter <span class="hint">(optional pre-filter before search)</span></label>
+        <select id="tpl-filter-col" onchange="onFilterColChange()">
+          <option value="">— none —</option>
+        </select>
+        <span id="filter-equals-label" style="display:none;white-space:nowrap;font-size:13px;color:#444"> equals </span>
+        <input type="text" id="tpl-filter-val" autocomplete="off" placeholder="value"
+               style="display:none;width:160px">
+      </div>
+    </fieldset>
+  </div>
+
+  <!-- ── SAVE ── -->
+  <div id="save-section" class="form-actions" style="display:none">
+    <button type="button" class="btn-primary" onclick="saveTemplate()">Save template</button>
+    <a href="{{ url_for('index') }}" class="btn-link">Cancel</a>
+  </div>
+
+  <!-- Back button always visible at top right -->
+  <a href="{{ url_for('index') }}" class="btn-secondary builder-back" title="Back to search">← Back</a>
+
+</section>
+
+<script>
+// Existing template data injected by server (null for new template)
+const EXISTING = {{ (template | tojson) if template else 'null' }};
+
+let currentColumns = [];
+
+// Which source path the metadata endpoints should read from.
+// For SharePoint, it's the local cache path returned by /api/resolve_source.
+function currentSourcePath() {
+  const t = (document.querySelector('input[name=src-type]:checked') || {}).value || 'local';
+  if (t === 'sharepoint') {
+    return document.getElementById('sp-cache-path').value || '';
+  }
+  return document.getElementById('tpl-path').value.trim();
+}
+
+function onSourceTypeChange() {
+  const t = (document.querySelector('input[name=src-type]:checked') || {}).value || 'local';
+  document.getElementById('local-source-row').style.display = t === 'local' ? '' : 'none';
+  document.getElementById('sharepoint-source-row').style.display = t === 'sharepoint' ? '' : 'none';
+  document.getElementById('sql-source-row').style.display = t === 'sql' ? '' : 'none';
+  // SQL sources don't have sheets/tables/header row from a file.
+  const sheetRow = document.getElementById('sheet-row');
+  const tableRow = document.getElementById('table-row');
+  const headerRow = document.getElementById('tpl-header') && document.getElementById('tpl-header').closest('.form-row');
+  if (t === 'sql') {
+    if (sheetRow) sheetRow.style.display = 'none';
+    if (tableRow) tableRow.style.display = 'none';
+    if (headerRow) headerRow.style.display = 'none';
+    loadSqlConnectionList();
+  } else if (headerRow) {
+    headerRow.style.display = '';
+  }
+}
+
+// ── SQL connection management ────────────────────────────────────────────
+async function loadSqlConnectionList() {
+  const sel = document.getElementById('sql-connection');
+  const currentValue = sel.value || (EXISTING && EXISTING.source && EXISTING.source.type === 'sql' ? EXISTING.source.connection_id : '');
+  try {
+    const r = await fetch('/api/sql_connections');
+    const j = await r.json();
+    sel.innerHTML = '<option value="">— none —</option>';
+    (j.connections || []).forEach(c => {
+      const o = document.createElement('option');
+      o.value = c.id;
+      o.textContent = `${c.name} — ${c.server}/${c.database}`;
+      if (c.id === currentValue) o.selected = true;
+      sel.appendChild(o);
+    });
+  } catch(e) {
+    sel.innerHTML = '<option value="">— error loading —</option>';
+  }
+}
+
+function openSqlConnDialog() {
+  const d = document.getElementById('sql-conn-dialog');
+  d.style.display = 'flex';
+  renderSqlConnList();
+  clearSqlConnForm();
+}
+function closeSqlConnDialog() {
+  document.getElementById('sql-conn-dialog').style.display = 'none';
+}
+async function renderSqlConnList() {
+  const box = document.getElementById('sql-conn-list');
+  box.textContent = 'Loading…';
+  const r = await fetch('/api/sql_connections');
+  const j = await r.json();
+  const conns = j.connections || [];
+  if (conns.length === 0) { box.textContent = 'No saved connections yet.'; return; }
+  box.innerHTML = '';
+  conns.forEach(c => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #eee';
+    const info = document.createElement('span');
+    info.textContent = `${c.name} — ${c.server}:${c.port}/${c.database} (${c.username})`;
+    row.appendChild(info);
+    const actions = document.createElement('span');
+    const editBtn = document.createElement('button');
+    editBtn.type='button'; editBtn.className='btn-link'; editBtn.textContent='Edit';
+    editBtn.onclick = () => loadIntoSqlConnForm(c);
+    const delBtn = document.createElement('button');
+    delBtn.type='button'; delBtn.className='btn-link'; delBtn.style.color='#b33'; delBtn.textContent='Delete';
+    delBtn.onclick = async () => {
+      if (!confirm(`Delete "${c.name}"?`)) return;
+      await fetch('/api/sql_connections?id=' + encodeURIComponent(c.id), {method: 'DELETE'});
+      renderSqlConnList();
+      loadSqlConnectionList();
+    };
+    actions.appendChild(editBtn); actions.appendChild(delBtn);
+    row.appendChild(actions);
+    box.appendChild(row);
+  });
+}
+function loadIntoSqlConnForm(c) {
+  document.getElementById('sql-conn-id').value       = c.id;
+  document.getElementById('sql-conn-name').value     = c.name || '';
+  document.getElementById('sql-conn-server').value   = c.server || '';
+  document.getElementById('sql-conn-port').value     = c.port || 1433;
+  document.getElementById('sql-conn-database').value = c.database || '';
+  document.getElementById('sql-conn-username').value = c.username || '';
+  document.getElementById('sql-conn-password').value = '';
+  document.getElementById('sql-conn-status').textContent = 'Editing — leave password blank to keep existing.';
+}
+function clearSqlConnForm() {
+  ['sql-conn-id','sql-conn-name','sql-conn-server','sql-conn-database','sql-conn-username','sql-conn-password']
+    .forEach(id => document.getElementById(id).value = '');
+  document.getElementById('sql-conn-port').value = 1433;
+  document.getElementById('sql-conn-status').textContent = '';
+}
+async function saveSqlConnection() {
+  const status = document.getElementById('sql-conn-status');
+  status.style.color = '#b33';
+  const payload = {
+    id:       document.getElementById('sql-conn-id').value || null,
+    name:     document.getElementById('sql-conn-name').value,
+    server:   document.getElementById('sql-conn-server').value,
+    port:     document.getElementById('sql-conn-port').value,
+    database: document.getElementById('sql-conn-database').value,
+    username: document.getElementById('sql-conn-username').value,
+    password: document.getElementById('sql-conn-password').value,
+  };
+  const r = await fetch('/api/sql_connections', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)
+  });
+  const j = await r.json();
+  if (!j.ok) { status.textContent = j.error || 'Save failed.'; return; }
+  status.style.color = '#080';
+  status.textContent = 'Saved.';
+  clearSqlConnForm();
+  renderSqlConnList();
+  await loadSqlConnectionList();
+  document.getElementById('sql-connection').value = j.id;
+}
+
+// ── Check query button ────────────────────────────────────────────────────
+async function checkSqlQuery() {
+  const status = document.getElementById('sql-check-status');
+  const cid = document.getElementById('sql-connection').value;
+  const q = document.getElementById('sql-query').value;
+  if (!cid) { status.style.color = '#b33'; status.textContent = '⚠ Pick a connection first.'; return; }
+  if (!q.trim()) { status.style.color = '#b33'; status.textContent = '⚠ Query is empty.'; return; }
+  status.style.color = '#555';
+  status.textContent = 'Checking…';
+  try {
+    const r = await fetch('/api/sql_check', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({connection_id: cid, query: q})
+    });
+    const j = await r.json();
+    if (j.ok) {
+      status.style.color = '#080';
+      status.textContent = `✓ Query OK — ${j.columns.length} column(s): ${j.columns.join(', ')}`;
+      // Populate the rest of the builder pipeline as if columns were loaded from a file.
+      currentColumns = j.columns;
+      renderColumns(j.columns);
+      document.getElementById('columns-section').style.display = '';
+      document.getElementById('settings-section').style.display = '';
+      document.getElementById('save-section').style.display = '';
+    } else {
+      status.style.color = '#b33';
+      status.textContent = '⚠ ' + (j.error || 'Query failed.');
+    }
+  } catch(e) {
+    status.style.color = '#b33';
+    status.textContent = '⚠ ' + (e.message || e);
+  }
+}
+
+async function connectSharePoint() {
+  const url = document.getElementById('tpl-url').value.trim();
+  if (!url) { showError('Paste a SharePoint URL first.'); return; }
+  clearError();
+  setStatus('Resolving SharePoint URL…');
+  try {
+    const resp = await fetch('/api/resolve_source', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({url})
+    });
+    const data = await resp.json();
+    if (data.error) {
+      if (data.needs_signin) {
+        showError(data.error + ' Click "Sign in" in the main window ribbon (Account), then try again.');
+      } else {
+        showError(data.error);
+      }
+      setStatus(''); return;
+    }
+    document.getElementById('sp-drive-id').value = data.drive_id;
+    document.getElementById('sp-item-id').value = data.item_id;
+    document.getElementById('sp-name').value = data.name;
+    document.getElementById('sp-cache-path').value = data.cache_path;
+    setStatus('Connected — loading columns…');
+    await loadSheets();
+  } catch (e) { showError(e.message); setStatus(''); }
+}
+
+// ── File picker ──────────────────────────────────────────────────────────
+async function browseFile() {
+  setStatus('Opening file picker…');
+  try {
+    const resp = await fetch('/api/browse_file');
+    const data = await resp.json();
+    if (data.error) { showError(data.error); return; }
+    if (data.path) {
+      document.getElementById('tpl-path').value = data.path;
+      await loadSheets();
+    } else {
+      setStatus('');
+    }
+  } catch(e) { showError(e.message); }
+}
+
+// ── Sheets ───────────────────────────────────────────────────────────────
+async function loadSheets() {
+  const path = currentSourcePath();
+  if (!path) { showError('Enter a source first.'); return; }
+  clearError();
+  setStatus('Reading sheet names…');
+  try {
+    const resp = await fetch('/api/sheets', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path})
+    });
+    const data = await resp.json();
+    if (data.error) { showError(data.error); setStatus(''); return; }
+
+    if (data.is_csv) {
+      // CSV has no sheets or tables — hide those rows and load columns directly.
+      document.getElementById('sheet-row').style.display = 'none';
+      document.getElementById('table-row').style.display = 'none';
+      document.getElementById('tpl-sheet').value = '';
+      document.getElementById('tpl-table').value = '';
+      setStatus('CSV detected — loading columns…');
+      await loadColumns();
+      return;
+    }
+
+    const sel = document.getElementById('tpl-sheet');
+    sel.innerHTML = '';
+    data.sheets.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      if (EXISTING && EXISTING.source.sheet_name === s) o.selected = true;
+      sel.appendChild(o);
+    });
+    document.getElementById('sheet-row').style.display = '';
+    await loadTables();
+  } catch(e) { showError(e.message); setStatus(''); }
+}
+
+// ── Tables ───────────────────────────────────────────────────────────────
+async function loadTables() {
+  const path = currentSourcePath();
+  const sheet = document.getElementById('tpl-sheet').value;
+  if (!path) return;
+  try {
+    const resp = await fetch('/api/tables', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, sheet_name: sheet})
+    });
+    const data = await resp.json();
+    const tableRow = document.getElementById('table-row');
+    if (!data.tables || data.tables.length === 0) {
+      tableRow.style.display = 'none';
+    } else {
+      const sel = document.getElementById('tpl-table');
+      sel.innerHTML = '<option value="">— use full sheet —</option>';
+      data.tables.forEach(t => {
+        const o = document.createElement('option');
+        o.value = t; o.textContent = t;
+        if (EXISTING && EXISTING.source.table_name === t) o.selected = true;
+        sel.appendChild(o);
+      });
+      tableRow.style.display = '';
+    }
+  } catch(e) { /* ignore table errors silently */ }
+  await loadColumns();
+}
+
+// ── Columns ──────────────────────────────────────────────────────────────
+async function loadColumns() {
+  const path = currentSourcePath();
+  if (!path) return;
+  const sheet = document.getElementById('tpl-sheet').value;
+  const tableEl = document.getElementById('tpl-table');
+  const table = tableEl ? tableEl.value : '';
+  const headerRow = parseInt(document.getElementById('tpl-header').value) || 1;
+
+  setStatus('Loading columns…');
+  try {
+    const resp = await fetch('/api/columns', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, sheet_name: sheet, table_name: table, header_row: headerRow})
+    });
+    const data = await resp.json();
+    if (data.error) { showError(data.error); setStatus(''); return; }
+
+    currentColumns = data.columns;
+    renderColumns(data.columns);
+    document.getElementById('columns-section').style.display = '';
+    document.getElementById('settings-section').style.display = '';
+    document.getElementById('save-section').style.display = '';
+    setStatus('✓ ' + data.columns.length + ' columns loaded');
+  } catch(e) { showError(e.message); setStatus(''); }
+}
+
+// ── Render column checkboxes ─────────────────────────────────────────────
+function renderColumns(columns) {
+  const preKey = EXISTING ? EXISTING.key_columns : [];
+  renderChecklist('key-columns-list', 'key_col', columns, preKey);
+
+  // Build views list from existing template or default single view
+  const existingViews = (EXISTING && EXISTING.views && EXISTING.views.length)
+    ? EXISTING.views
+    : [{ name: 'Default', columns: EXISTING ? (EXISTING.result_columns || []) : [] }];
+  renderViews(existingViews);
+
+  // Rebuild filter column dropdown
+  const filterSel = document.getElementById('tpl-filter-col');
+  const prevVal = filterSel.value;
+  filterSel.innerHTML = '<option value="">— none —</option>';
+  columns.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    if (c === prevVal || (EXISTING && EXISTING.default_filter && EXISTING.default_filter.column === c))
+      o.selected = true;
+    filterSel.appendChild(o);
+  });
+  onFilterColChange();
+
+  // Restore settings
+  if (EXISTING) {
+    document.getElementById('tpl-mode').value = EXISTING.default_match_mode || 'exact';
+    if (EXISTING.default_filter && EXISTING.default_filter.equals) {
+      document.getElementById('tpl-filter-val').value = EXISTING.default_filter.equals;
+    }
+  }
+}
+
+// ── Views ────────────────────────────────────────────────────────────────
+function renderViews(views) {
+  const container = document.getElementById('views-list');
+  container.innerHTML = '';
+  views.forEach((v, i) => appendViewBlock(v.name, v.columns, i, v.sheet_name || '', v.table_name || ''));
+}
+
+function appendViewBlock(name, preselected, idx, overrideSheet, overrideTable) {
+  const container = document.getElementById('views-list');
+  idx = (idx !== undefined) ? idx : container.querySelectorAll('.view-block').length;
+  const block = document.createElement('div');
+  block.className = 'view-block';
+  block.dataset.viewIdx = idx;
+
+  const header = document.createElement('div');
+  header.className = 'view-block-header';
+  const collapseBtn = document.createElement('button');
+  collapseBtn.type = 'button';
+  collapseBtn.className = 'view-collapse';
+  collapseBtn.title = 'Collapse / expand this view';
+  collapseBtn.textContent = '▾';
+  collapseBtn.onclick = () => block.classList.toggle('collapsed');
+  header.appendChild(collapseBtn);
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'view-name-input';
+  nameInput.placeholder = 'View name (e.g. Summary, Full Details)';
+  nameInput.value = name || '';
+  nameInput.autocomplete = 'off';
+  header.appendChild(nameInput);
+
+  if (idx > 0) {
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn-link';
+    removeBtn.style.cssText = 'color:#b33;margin-left:8px;font-size:12px';
+    removeBtn.textContent = 'Remove view';
+    removeBtn.onclick = () => block.remove();
+    header.appendChild(removeBtn);
+  }
+  block.appendChild(header);
+
+  // ── Per-view sheet override (schema v4) ──
+  const overrideRow = document.createElement('div');
+  overrideRow.className = 'view-override';
+  overrideRow.style.cssText = 'margin:4px 0 8px; font-size:12px; color:#555';
+  const hasOverride = !!overrideSheet;
+  overrideRow.innerHTML =
+    '<label style="cursor:pointer">' +
+    '<input type="checkbox" class="view-override-toggle"' + (hasOverride ? ' checked' : '') + '> ' +
+    'Use a different sheet in the same workbook</label>' +
+    '<div class="view-override-fields" style="display:' + (hasOverride ? '' : 'none') + '; margin-top:6px; padding-left:22px">' +
+    '<label>Sheet: <select class="view-override-sheet"><option value="">— loading…—</option></select></label> ' +
+    '<label style="margin-left:10px">Table: <select class="view-override-table"><option value="">— none —</option></select></label>' +
+    '<div class="view-override-status" style="font-size:11px;color:#888;margin-top:4px"></div>' +
+    '</div>';
+  block.appendChild(overrideRow);
+
+  const toggle    = overrideRow.querySelector('.view-override-toggle');
+  const fields    = overrideRow.querySelector('.view-override-fields');
+  const sheetSel  = overrideRow.querySelector('.view-override-sheet');
+  const tableSel  = overrideRow.querySelector('.view-override-table');
+  const status    = overrideRow.querySelector('.view-override-status');
+  block._overrideSheet = sheetSel;
+  block._overrideTable = tableSel;
+  block._overrideToggle = toggle;
+
+  toggle.addEventListener('change', () => {
+    fields.style.display = toggle.checked ? '' : 'none';
+    if (toggle.checked && sheetSel.options.length <= 1) loadViewOverrideSheets(block);
+    // Reload column list for this view based on the effective sheet/table.
+    reloadViewColumns(block, preselected);
+  });
+  sheetSel.addEventListener('change', () => { loadViewOverrideTables(block, ''); reloadViewColumns(block, preselected); });
+  tableSel.addEventListener('change', () => { reloadViewColumns(block, preselected); });
+
+  const checklist = document.createElement('div');
+  checklist.className = 'column-checklist';
+  const prefix = 'view_col_' + idx;
+
+  // Select-all toggle
+  const toggleRow = document.createElement('div');
+  toggleRow.className = 'checklist-toggle';
+  toggleRow.innerHTML = '<label class="check-label check-label--toggle"><input type="checkbox" onchange="toggleViewAll(this)"> <em>Select all</em></label>';
+  checklist.appendChild(toggleRow);
+
+  currentColumns.forEach(col => {
+    const label = document.createElement('label');
+    label.className = 'check-label';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.viewGroup = 'view_col';
+    cb.value = col;
+    if (preselected && preselected.includes(col)) cb.checked = true;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + col));
+    checklist.appendChild(label);
+  });
+  block.appendChild(checklist);
+  block._checklist = checklist;
+  container.appendChild(block);
+
+  // If editing a template with an override already set, populate & load.
+  if (hasOverride) {
+    loadViewOverrideSheets(block, overrideSheet).then(() => {
+      if (overrideTable) loadViewOverrideTables(block, overrideTable).then(() => {
+        reloadViewColumns(block, preselected);
+      });
+      else reloadViewColumns(block, preselected);
+    });
+  }
+}
+
+// ── Per-view override helpers ─────────────────────────────────────────────
+async function loadViewOverrideSheets(block, preselectSheet) {
+  const path = currentSourcePath(); if (!path) return;
+  const sheetSel = block._overrideSheet;
+  sheetSel.innerHTML = '<option value="">— loading… —</option>';
+  try {
+    const r = await fetch('/api/sheets', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path})
+    });
+    const j = await r.json();
+    const sheets = (j.sheets || []);
+    sheetSel.innerHTML = '';
+    sheets.forEach(s => {
+      const o = document.createElement('option'); o.value = s; o.textContent = s;
+      if (s === preselectSheet) o.selected = true;
+      sheetSel.appendChild(o);
+    });
+  } catch(e) {
+    sheetSel.innerHTML = '<option value="">— error —</option>';
+  }
+}
+async function loadViewOverrideTables(block, preselectTable) {
+  const path = currentSourcePath(); if (!path) return;
+  const tableSel = block._overrideTable;
+  const sheet = block._overrideSheet.value;
+  tableSel.innerHTML = '<option value="">— none —</option>';
+  try {
+    const r = await fetch('/api/tables', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, sheet_name: sheet})
+    });
+    const j = await r.json();
+    (j.tables || []).forEach(t => {
+      const o = document.createElement('option'); o.value = t; o.textContent = t;
+      if (t === preselectTable) o.selected = true;
+      tableSel.appendChild(o);
+    });
+  } catch(e) {}
+}
+async function reloadViewColumns(block, preselected) {
+  const path = currentSourcePath(); if (!path) return;
+  const useOverride = block._overrideToggle && block._overrideToggle.checked;
+  const sheet = useOverride ? block._overrideSheet.value : document.getElementById('tpl-sheet').value;
+  const tableEl = useOverride ? block._overrideTable : document.getElementById('tpl-table');
+  const table = (tableEl && tableEl.value) || '';
+  const headerRow = parseInt(document.getElementById('tpl-header').value) || 1;
+  const status = block.querySelector('.view-override-status');
+  try {
+    const r = await fetch('/api/columns', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path, sheet_name: sheet, table_name: table, header_row: headerRow})
+    });
+    const j = await r.json();
+    const cols = j.columns || [];
+    // Rebuild the checklist for this view
+    const checklist = block._checklist;
+    const toggleRow = checklist.querySelector('.checklist-toggle');
+    checklist.innerHTML = '';
+    checklist.appendChild(toggleRow);
+    cols.forEach(col => {
+      const label = document.createElement('label');
+      label.className = 'check-label';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.dataset.viewGroup = 'view_col';
+      cb.value = col;
+      if (preselected && preselected.includes(col)) cb.checked = true;
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + col));
+      checklist.appendChild(label);
+    });
+    if (status) status.textContent = useOverride
+      ? `Loaded ${cols.length} column(s) from sheet "${sheet}"${table ? ' / table "' + table + '"' : ''}.`
+      : '';
+  } catch(e) {
+    if (status) status.textContent = 'Failed to load columns: ' + (e.message || e);
+  }
+}
+
+function addView() {
+  appendViewBlock('', [], undefined);
+}
+
+function toggleViewAll(toggleCb) {
+  const block = toggleCb.closest('.view-block');
+  if (!block) return;
+  block.querySelectorAll('input[data-view-group="view_col"]').forEach(cb => cb.checked = toggleCb.checked);
+}
+
+function renderChecklist(containerId, prefix, columns, preselected) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+
+  // Select-all toggle
+  const toggleRow = document.createElement('div');
+  toggleRow.className = 'checklist-toggle';
+  toggleRow.innerHTML =
+    '<label class="check-label check-label--toggle">' +
+    '<input type="checkbox" onchange="toggleAll(\'' + prefix + '\', this.checked)"> ' +
+    '<em>Select all</em></label>';
+  container.appendChild(toggleRow);
+
+  columns.forEach(col => {
+    const label = document.createElement('label');
+    label.className = 'check-label';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.dataset.group = prefix;
+    cb.value = col;
+    if (preselected.includes(col)) cb.checked = true;
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + col));
+    container.appendChild(label);
+  });
+}
+
+function toggleAll(prefix, checked) {
+  document.querySelectorAll('input[data-group="' + prefix + '"]')
+    .forEach(cb => cb.checked = checked);
+}
+
+// ── Event handlers ────────────────────────────────────────────────────────
+function onSheetChange() {
+  loadTables(); // loadTables calls loadColumns at end
+}
+function onTableChange() {
+  loadColumns();
+}
+function onFilterColChange() {
+  const col = document.getElementById('tpl-filter-col').value;
+  document.getElementById('filter-equals-label').style.display = col ? '' : 'none';
+  document.getElementById('tpl-filter-val').style.display = col ? '' : 'none';
+}
+
+// ── Save ──────────────────────────────────────────────────────────────────
+async function saveTemplate() {
+  clearError();
+  const name = document.getElementById('tpl-name').value.trim();
+  if (!name) { showError('Template name is required.'); return; }
+
+  const srcType = (document.querySelector('input[name=src-type]:checked') || {}).value || 'local';
+  let source;
+  if (srcType === 'sharepoint') {
+    const url = document.getElementById('tpl-url').value.trim();
+    const driveId = document.getElementById('sp-drive-id').value.trim();
+    const itemId = document.getElementById('sp-item-id').value.trim();
+    const spName = document.getElementById('sp-name').value.trim();
+    if (!url) { showError('SharePoint URL is required.'); return; }
+    if (!driveId || !itemId) { showError('Click "Connect & load" to resolve the SharePoint URL first.'); return; }
+    source = { type: 'sharepoint', url, drive_id: driveId, item_id: itemId, name: spName };
+  } else if (srcType === 'sql') {
+    const connId = document.getElementById('sql-connection').value;
+    const query = document.getElementById('sql-query').value.trim();
+    if (!connId) { showError('Pick a SQL connection.'); return; }
+    if (!query) { showError('SQL query is required.'); return; }
+    source = { type: 'sql', connection_id: connId, query };
+  } else {
+    const path = document.getElementById('tpl-path').value.trim();
+    if (!path) { showError('File path is required.'); return; }
+    source = { type: 'local', path };
+  }
+
+  const keyColumns = [...document.querySelectorAll('input[data-group="key_col"]:checked')].map(c => c.value);
+  if (keyColumns.length === 0) { showError('Select at least one key column.'); return; }
+
+  // Build views array from view blocks
+  const viewBlocks = document.querySelectorAll('#views-list .view-block');
+  const views = [];
+  for (const block of viewBlocks) {
+    const vname = (block.querySelector('.view-name-input').value || '').trim();
+    if (!vname) { showError('Every view must have a name.'); return; }
+    const cols = [...block.querySelectorAll('input[data-view-group="view_col"]:checked')].map(c => c.value);
+    if (cols.length === 0) { showError(`View "${vname}" must have at least one column selected.`); return; }
+    const view = { name: vname, columns: cols };
+    // Per-view sheet override (schema v4): only include if the toggle is on AND a sheet is chosen.
+    const useOverride = block._overrideToggle && block._overrideToggle.checked;
+    if (useOverride) {
+      const oSheet = (block._overrideSheet && block._overrideSheet.value) || '';
+      const oTable = (block._overrideTable && block._overrideTable.value) || '';
+      if (oSheet) view.sheet_name = oSheet;
+      if (oTable) view.table_name = oTable;
+    }
+    views.push(view);
+  }
+  if (views.length === 0) { showError('At least one view is required.'); return; }
+  // result_columns mirrors view[0] for backward compat; server also enforces this on save.
+  const resultColumns = views[0].columns;
+
+  const sheet     = document.getElementById('tpl-sheet').value;
+  const tableEl   = document.getElementById('tpl-table');
+  const table     = tableEl ? tableEl.value : '';
+  const headerRow = parseInt(document.getElementById('tpl-header').value) || 1;
+  const matchMode = document.getElementById('tpl-mode').value;
+  const filterCol = document.getElementById('tpl-filter-col').value;
+  const filterVal = document.getElementById('tpl-filter-val').value.trim();
+
+  if (srcType !== 'sql') {
+    source.sheet_name = sheet || null;
+    source.table_name = table || null;
+    source.header_row = headerRow;
+  }
+
+  const payload = {
+    name,
+    source,
+    key_columns:    keyColumns,
+    result_columns: resultColumns,
+    views,
+    labels: (EXISTING && EXISTING.labels) ? EXISTING.labels : {},
+    default_filter: filterCol ? {column: filterCol, equals: filterVal} : null,
+    default_match_mode: matchMode,
+  };
+
+  try {
+    const resp = await fetch('/api/save_template', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (data.errors && data.errors.length) { showError(data.errors.join(' ')); return; }
+    window.location.href = '/?template=' + encodeURIComponent(name);
+  } catch(e) { showError(e.message); }
+}
+
+// ── Template picker (… button) ───────────────────────────────────────────
+function toggleTplPicker() {
+  const p = document.getElementById('tpl-picker');
+  if (!p) return;
+  p.style.display = p.style.display === 'none' ? '' : 'none';
+}
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('.tpl-picker-wrap')) {
+    const p = document.getElementById('tpl-picker');
+    if (p) p.style.display = 'none';
+  }
+});
+
+// ── UI helpers ────────────────────────────────────────────────────────────
+function showError(msg) {
+  const b = document.getElementById('error-banner');
+  b.textContent = '⚠ ' + msg;
+  b.style.display = '';
+  b.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+}
+function clearError() {
+  document.getElementById('error-banner').style.display = 'none';
+}
+function setStatus(msg) {
+  document.getElementById('load-status').textContent = msg;
+}
+
+// ── On load: restore state when editing an existing template ──────────────
+window.addEventListener('DOMContentLoaded', () => {
+  onSourceTypeChange();
+  if (EXISTING) {
+    const stype = EXISTING.source.type || 'local';
+    if (stype === 'sharepoint') {
+      if (EXISTING.source.url) {
+        document.getElementById('tpl-url').value = EXISTING.source.url;
+        connectSharePoint();
+      }
+    } else if (stype === 'sql') {
+      // Restore connection + query, then run Check to repopulate the column list.
+      loadSqlConnectionList().then(() => {
+        const sel = document.getElementById('sql-connection');
+        if (EXISTING.source.connection_id) sel.value = EXISTING.source.connection_id;
+        if (EXISTING.source.query) document.getElementById('sql-query').value = EXISTING.source.query;
+        // Fire Check so column list is available for the key/views checklists.
+        if (sel.value && EXISTING.source.query) checkSqlQuery();
+      });
+    } else if (EXISTING.source.path) {
+      loadSheets();  // cascade: sheets → tables → columns → settings
+    }
+  }
+});
+</script>
+{% endblock %}

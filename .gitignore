@@ -1,0 +1,27 @@
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+*.spec
+
+# Data dirs (user-specific)
+waire_lookup/data/
+waire_lookup/lookup_templates/
+waire_lookup/exports/
+waire_lookup/logs/
+
+# Build artifacts
+packaging/build/
+release/WAIRELookUp_v*/
+release/*.zip
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,7 @@
+{
+  "card_max": 2,
+  "poll_minutes": 9,
+  "graph_client_id": "",
+  "graph_tenant": "organizations",
+  "teams_webhooks": []
+}

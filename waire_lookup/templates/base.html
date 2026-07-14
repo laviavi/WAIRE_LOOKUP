@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}WAIRE Lookup{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header>
+    <h1>WAIRE Lookup Tool</h1>
+    <nav>
+      <a href="{{ url_for('index') }}">Search</a>
+      <a href="{{ url_for('template_new') }}">New Template</a>
+    </nav>
+    <form method="POST" action="{{ url_for('do_restart') }}" style="margin-left:auto">
+      <button type="submit" class="btn-restart">Restart server</button>
+    </form>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

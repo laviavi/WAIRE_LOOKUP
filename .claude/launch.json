@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "waire-lookup",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["app.py"],
+      "cwd": "D:\\WAIRELookUp\\waire_lookup",
+      "port": 2305
+    }
+  ]
+}
