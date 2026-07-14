@@ -6,6 +6,6 @@
 #
 # Record every bump in CHANGELOG.md with a one-line note.
 
-SERVER_VERSION = "1.17.0"
+SERVER_VERSION = "1.17.1"
 UI_VERSION = "2.22.0"
 RELEASE_VERSION = "1.3.0"

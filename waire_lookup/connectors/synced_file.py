@@ -1,4 +1,6 @@
+import hashlib
 import io
+import json
 import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime
@@ -10,6 +12,11 @@ from openpyxl.utils import get_column_letter, range_boundaries
 from core.fileio import is_csv, read_shared_bytes
 
 from .base import DataSource
+
+
+def _parquet_key(path: str, sheet: str | None, table: str | None, header: int) -> str:
+    raw = f"{path}::{sheet}::{table}::{header}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 class SyncedFileSource(DataSource):
@@ -31,8 +38,49 @@ class SyncedFileSource(DataSource):
     def _current_mtime(self) -> float:
         return self._path.stat().st_mtime
 
+    def _parquet_path(self) -> Path:
+        import config
+        key = _parquet_key(str(self._path), self._sheet_name, self._table_name, self._header_row)
+        return config.PARQUET_CACHE_DIR / f"{key}.parquet"
+
+    def _parquet_meta_path(self) -> Path:
+        return self._parquet_path().with_suffix(".meta")
+
+    def _try_read_parquet(self, mtime: float) -> pd.DataFrame | None:
+        pq = self._parquet_path()
+        meta = self._parquet_meta_path()
+        if not pq.exists() or not meta.exists():
+            return None
+        try:
+            info = json.loads(meta.read_text(encoding="utf-8"))
+            if info.get("mtime") != mtime:
+                return None
+            df = pd.read_parquet(pq)
+            return df.fillna("")
+        except Exception:
+            return None
+
+    def _write_parquet(self, df: pd.DataFrame, mtime: float) -> None:
+        try:
+            pq = self._parquet_path()
+            pq.parent.mkdir(parents=True, exist_ok=True)
+            df.to_parquet(pq, index=False)
+            self._parquet_meta_path().write_text(
+                json.dumps({"mtime": mtime}), encoding="utf-8"
+            )
+        except Exception:
+            pass
+
     def load(self) -> pd.DataFrame:
         mtime = self._current_mtime()
+
+        if not is_csv(self._path):
+            cached = self._try_read_parquet(mtime)
+            if cached is not None:
+                self._df = cached
+                self._cached_mtime = mtime
+                return self._df
+
         data = read_shared_bytes(self._path)
 
         if is_csv(self._path):
@@ -60,6 +108,10 @@ class SyncedFileSource(DataSource):
 
         self._df = self._df.fillna("")
         self._cached_mtime = mtime
+
+        if not is_csv(self._path):
+            self._write_parquet(self._df, mtime)
+
         return self._df
 
     def _load_table(self, data: bytes) -> pd.DataFrame:

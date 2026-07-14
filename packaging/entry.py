@@ -49,7 +49,8 @@ exports_dir = data_dir / "exports"
 logs_dir = data_dir / "logs"
 snapshots_dir = data_dir / "snapshots"
 source_cache_dir = data_dir / "source_cache"
-for _d in (templates_data, exports_dir, logs_dir, snapshots_dir, source_cache_dir):
+parquet_cache_dir = data_dir / "parquet_cache"
+for _d in (templates_data, exports_dir, logs_dir, snapshots_dir, source_cache_dir, parquet_cache_dir):
     _d.mkdir(parents=True, exist_ok=True)
 
 # ── Point config at the writable dirs BEFORE importing the app ──
@@ -68,6 +69,7 @@ config.SOURCE_STATUS_FILE = data_dir / "source_status.json"
 config.TOKEN_CACHE_FILE = data_dir / "token_cache.json"
 config.SQL_CONNECTIONS_FILE = data_dir / "sql_connections.json"
 config.SQL_CREDENTIALS_FILE = data_dir / "sql_credentials.dat"
+config.PARQUET_CACHE_DIR = parquet_cache_dir
 
 import app as app_module  # noqa: E402
 

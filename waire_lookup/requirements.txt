@@ -5,4 +5,6 @@ pytest==8.3.5
 msal==1.31.1
 requests==2.32.3
 pymssql==2.3.2
+pyarrow==19.0.1
 pywin32==310
+pythoncom

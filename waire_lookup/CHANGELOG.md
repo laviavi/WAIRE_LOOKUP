@@ -3,6 +3,9 @@
 Versions are tracked in `version.py`. Bump **Server** for backend changes,
 **UI** for frontend changes, and add a line here for every iteration.
 
+## Server v1.17.1 — 2026-07-14
+- **Parquet cache + preload.** Excel sources are cached as local parquet files after first parse (~50-100x faster on repeat loads). All file-based templates are preloaded in a background thread at startup so the first search is instant.
+
 ## Server v1.17.0 · UI v2.22.0 — 2026-07-14
 - **v1.3.0 feature release (M1–M11).** DPAPI-encrypted token cache with legacy migration (M1). Vendored Tabler icons offline (M2). Template export/import with SQL connection_id blanked on export (M3). GitHub update checker with 6-hour cache (M4). Not-found reporting with expandable panel, input counters, CSV appendix (M5). Show-50-more pagination for truncated result groups (M6). Cross-template search sweeping all file-based templates (M7). Quick filter composing with card collapse and selection state (M8). Source-change notification to Teams webhooks with version-based debounce (M9). In-app log viewer modal (M10). SharePoint "Test connection" button in setup modal (M11).
 

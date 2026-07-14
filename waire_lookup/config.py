@@ -17,6 +17,8 @@ SQL_CREDENTIALS_FILE = BASE_DIR / "sql_credentials.dat"  # DPAPI-encrypted blob
 
 UPDATE_REPO = "laviavi/WAIRE_LOOKUP"
 
+PARQUET_CACHE_DIR = BASE_DIR / "parquet_cache"
+
 SEARCH_RESULT_CAP = 50
 SNAPSHOT_TTL_HOURS = 24
 

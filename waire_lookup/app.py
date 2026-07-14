@@ -1177,6 +1177,29 @@ def template_delete(name):
     return redirect(url_for("index"))
 
 
+def _preload_sources() -> None:
+    """Warm the parquet cache for all file-based templates."""
+    try:
+        templates = templates_store.list_templates()
+    except Exception:
+        return
+    for name in templates:
+        try:
+            tpl = templates_store.load_template(name)
+            if not tpl:
+                continue
+            stype = (tpl.get("source", {}).get("type") or "local").strip()
+            if stype == "sql":
+                continue
+            groups = group_views_by_source(tpl)
+            for g in groups:
+                src = _get_view_group_source(tpl, g)
+                if src.is_stale():
+                    src.load()
+        except Exception:
+            pass
+
+
 def start_background() -> None:
     """Start the source poller + do a snapshot cleanup. Idempotent."""
     try:
@@ -1184,6 +1207,7 @@ def start_background() -> None:
     except Exception:
         pass
     start_poller()
+    threading.Thread(target=_preload_sources, daemon=True).start()
 
 
 def ensure_single_instance(port: int, host: str = "127.0.0.1") -> None:
