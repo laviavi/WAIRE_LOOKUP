@@ -89,6 +89,31 @@ def test_matched_on_column():
     assert "00456" in r.rows["_matched_on"].iloc[0]
 
 
+def test_card_title_exact_is_record_value_no_tag():
+    df = make_df()
+    r = search(df, [("ID", ["00456"])], "exact")
+    # Exact match: card title is the record's actual value, no annotation.
+    assert r.rows["_card_title"].iloc[0] == "00456"
+    assert "(partial match)" not in r.rows["_card_title"].iloc[0]
+
+
+def test_card_title_partial_shows_record_value_and_tag():
+    df = make_df()
+    # Searching "1045" partially hits the record whose ID is "104512".
+    r = search(df, [("ID", ["1045"])], "partial")
+    assert r.total_matches == 1
+    title = r.rows["_card_title"].iloc[0]
+    assert title == "104512 (partial match)"
+
+
+def test_card_title_partial_but_exact_value_has_no_tag():
+    df = make_df()
+    # Partial mode, but the record value equals the search value exactly.
+    r = search(df, [("ID", ["00456"])], "partial")
+    assert r.rows["_card_title"].iloc[0] == "00456"
+    assert "(partial match)" not in r.rows["_card_title"].iloc[0]
+
+
 def test_multi_value_or_within_column():
     df = make_df()
     r = search(df, [("ID", ["00123", "00456"])], "exact")
@@ -144,3 +169,89 @@ def test_and_multi_value_or_plus_and():
     # 00123 has 2 Active rows, 00456 has 1 Inactive row → 2 matches
     r = search(df, [("ID", ["00123", "00456"]), ("Status", ["Active"])], "exact")
     assert r.total_matches == 2
+
+
+# ── Wildcard matching in partial mode (Server 1.19.0) ──────────────────────
+
+def test_wildcard_starts_with():
+    df = make_df()
+    r = search(df, [("Name", ["alpha*"])], "partial")
+    assert r.total_matches == 2
+    assert r.not_found == []
+
+
+def test_wildcard_ends_with():
+    df = make_df()
+    r = search(df, [("Name", ["*corp"])], "partial")
+    assert r.total_matches == 1  # "Alpha Corp" only — "Alpha Corp Dup" doesn't end with corp
+
+
+def test_wildcard_contains_both_ends():
+    df = make_df()
+    r = search(df, [("Name", ["*corp*"])], "partial")
+    assert r.total_matches == 2
+
+
+def test_wildcard_question_mark():
+    df = make_df()
+    r = search(df, [("ID", ["0045?"])], "partial")
+    assert r.total_matches == 1  # 00456
+    r = search(df, [("ID", ["1?4512"])], "partial")
+    assert r.total_matches == 1  # 104512
+
+
+def test_wildcard_question_requires_one_char():
+    df = make_df()
+    r = search(df, [("ID", ["00123?"])], "partial")
+    assert r.total_matches == 0
+    assert r.not_found == ["00123?"]
+
+
+def test_wildcard_multiple():
+    df = make_df()
+    # Anchored: must START with a — "Beta Inc" contains a and c but doesn't start with a.
+    r = search(df, [("Name", ["a*c*"])], "partial")
+    assert r.total_matches == 2  # both Alpha Corp rows
+
+
+def test_wildcard_regex_chars_escaped():
+    df = pd.DataFrame({
+        "Name": ["acme (usa)", "acme x"],
+        "ID": ["1.5", "1x50"],
+    })
+    r = search(df, [("Name", ["acme (*"])], "partial")
+    assert r.total_matches == 1  # parenthesis must be literal, not a regex group
+    r = search(df, [("ID", ["1.5*"])], "partial")
+    assert r.total_matches == 1  # dot must be literal — must NOT match "1x50"
+
+
+def test_plain_partial_still_contains():
+    df = make_df()
+    # Backward compat: no wildcard chars → unanchored substring, exactly as before.
+    r = search(df, [("Name", ["alpha"])], "partial")
+    assert r.total_matches == 2
+
+
+def test_exact_mode_wildcard_literal():
+    df = make_df()
+    r = search(df, [("Name", ["alpha*"])], "exact")
+    assert r.total_matches == 0
+    assert r.not_found == ["alpha*"]
+    df2 = pd.DataFrame({"Name": ["alpha*", "alpha"]})
+    r2 = search(df2, [("Name", ["alpha*"])], "exact")
+    assert r2.total_matches == 1  # a literal cell "alpha*" matches exactly
+
+
+def test_wildcard_not_found_consistency():
+    df = make_df()
+    r = search(df, [("Name", ["alpha*", "zzz*"])], "partial")
+    assert r.total_matches == 2
+    assert r.not_found == ["zzz*"]
+
+
+def test_wildcard_matched_on_and_title():
+    df = make_df()
+    r = search(df, [("Name", ["alpha*"])], "partial")
+    assert r.total_matches == 2
+    assert all(m == "Name = alpha*" for m in r.rows["_matched_on"])
+    assert all("(partial match)" in t for t in r.rows["_card_title"])

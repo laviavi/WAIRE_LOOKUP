@@ -246,6 +246,9 @@
 }
 .chip.info { background: #e8f0fe; color: #1a3a5c; }
 
+.link-btn { background: #e8f0fe; color: #1a56c4; border: 1px solid #b8d0f0; margin-left: 6px; }
+.link-btn:hover { background: #d0e2fc; }
+
 .table-scroll { flex: 1; overflow: auto; }
 /* Auto layout initially (columns size to content); JS switches to .resizable
    (fixed layout + per-<col> widths) so each column can be dragged wider/narrower. */
@@ -530,8 +533,23 @@
 .progress-bar-fill.indeterminate { width: 30%; animation: indeterminate 1.4s ease-in-out infinite; }
 @keyframes indeterminate { 0% { transform: translateX(-100%); width: 30%; } 50% { width: 40%; } 100% { transform: translateX(400%); width: 30%; } }
 .progress-status { font-size: 13px; color: #6b7280; margin-top: 4px; }
-/* Show-more button (M6) */
-.show-more-wrap { padding: 8px 12px; text-align: center; }
+/* Numbered pagination (shadcn/ui-styled: pill buttons, filled active page) */
+.pagination-bar { display: flex; align-items: center; justify-content: center; gap: 4px; padding: 10px 12px; flex-wrap: wrap; }
+.page-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 32px; height: 32px; padding: 0 8px; box-sizing: border-box;
+  border: 1px solid #dcdfe4; border-radius: 6px; background: #fff; color: #1a1a1a;
+  font-size: 12.5px; cursor: pointer; font-family: inherit;
+}
+.page-btn.nav { padding: 0 12px; color: #444; }
+.page-btn:hover:not(:disabled):not(.active) { background: #f4f6f8; border-color: #c6cbd2; }
+.page-btn.active { background: #1a3a5c; color: #fff; border-color: #1a3a5c; font-weight: 600; cursor: default; }
+.page-btn:disabled { opacity: 0.4; cursor: default; }
+.page-ellipsis { padding: 0 4px; color: #99a; font-size: 12.5px; user-select: none; }
+
+/* Back-to-previous-search button (cross-template link round trip) */
+.back-btn { background: #eef2f7; color: #1a3a5c; border: 1px solid #bcd; }
+.back-btn:hover { background: #dce8f5; }
 
 /* Not-found panel (M5) */
 .nf-panel { background: #fff8e8; border: 1px solid #e6d9a0; border-radius: 4px; margin: 0 0 6px; padding: 8px 12px; }

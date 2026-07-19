@@ -1,0 +1,175 @@
+/* Template Designer (SSMS-style builder) — standalone page styles.
+   Replicates the few shared control classes (.rbtn/.chk/.c-banner) from
+   option_c.css so the page stays independent of the search stylesheet. */
+
+.bld-body { margin: 0; background: #f0f2f5; }
+.bld-app { display: flex; flex-direction: column; gap: 10px; padding: 0 14px 14px; min-height: 100vh; box-sizing: border-box; }
+
+/* ── Shared controls (copied from option_c.css) ── */
+.rbtn {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid #bcbcbc; background: #fafafa; border-radius: 4px;
+  padding: 5px 10px; font-size: 12px; color: #1a1a1a;
+  white-space: nowrap; cursor: pointer; font-family: inherit; text-decoration: none;
+}
+.rbtn:hover { background: #eef3f9; border-color: #1a3a5c; }
+.rbtn i { font-size: 15px; }
+.rbtn.primary { background: #1a3a5c; color: #fff; border-color: #1a3a5c; }
+.rbtn.primary:hover { background: #14305a; }
+.rbtn:disabled { opacity: 0.4; cursor: default; background: #fafafa; border-color: #bcbcbc; }
+.chk { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: #444; cursor: pointer; white-space: nowrap; }
+.c-banner { border-radius: 4px; padding: 9px 12px; font-size: 12px; }
+.c-banner.warning { background: #fff8e1; border: 1px solid #f0c040; color: #5a4000; }
+
+/* ── Title bar + wizard ── */
+.bld-titlebar {
+  display: flex; align-items: center; gap: 10px;
+  background: #1a3a5c; color: #fff; padding: 10px 16px; margin: 0 -14px 4px;
+}
+.bld-titlebar h3 { margin: 0; font-size: 15px; font-weight: 600; }
+.bld-titlebar > i { font-size: 20px; }
+.bld-wizard { display: flex; align-items: center; gap: 8px; margin-left: 18px; font-size: 12px; color: #c8dff5; }
+.wz-step { background: rgba(255,255,255,0.12); border-radius: 4px; padding: 3px 10px; }
+.wz-step.done { background: #2e7d32; color: #fff; }
+.wz-step.done::after { content: " ✓"; }
+.bld-back { margin-left: auto; }
+
+/* ── Source / settings strips ── */
+.bld-source { background: #fff; border: 1px solid #d8dce1; border-radius: 6px; padding: 10px 14px; }
+.bld-src-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; }
+.bld-src-row > label { font-size: 12px; color: #444; white-space: nowrap; min-width: 96px; }
+.bld-grow { flex: 1; }
+.bld-name { width: 260px; }
+.bld-radios { display: flex; gap: 14px; margin-left: 16px; }
+.bld-hdr-lbl { min-width: 0 !important; margin-left: 8px; }
+.bld-hdr { width: 60px; }
+.bld-sql { font-family: Consolas, 'Courier New', monospace; font-size: 12px; }
+.bld-status { font-size: 12px; color: #666; min-height: 16px; margin-top: 4px; }
+.bld-status.ok { color: #2e7d32; }
+.bld-status.err { color: #b00020; }
+.bld-save-actions { margin-left: auto; display: flex; gap: 8px; }
+
+/* ── Panes ── */
+.bld-pane { background: #fff; border: 1px solid #d8dce1; border-radius: 6px; padding: 10px 14px; }
+.bld-pane-title { font-size: 12px; color: #667; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+.bld-linked-add { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; }
+.bld-linked-add label { font-size: 12px; color: #667; }
+
+/* ── Diagram pane ── */
+#diagram-pane { position: relative; min-height: 140px; overflow: auto; }
+#dg-links { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; overflow: visible; }
+#dg-boxes { position: relative; display: flex; flex-wrap: wrap; gap: 46px; align-items: flex-start; z-index: 2; padding: 6px 2px; }
+.dg-box {
+  width: 218px; border: 1px solid #a9b4c0; border-radius: 6px; background: #fff;
+  overflow: hidden; flex-shrink: 0; position: relative; z-index: 2;
+}
+.dg-box.primary { border-color: #1a3a5c; box-shadow: 0 0 0 1px #1a3a5c; }
+.dg-box.linked { border-style: dashed; }
+.dg-box-head {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  background: #eef1f5; font-size: 12px; font-weight: 600; cursor: default;
+  border-bottom: 1px solid #d8dce1;
+}
+.dg-box.primary .dg-box-head { background: #1a3a5c; color: #fff; }
+.dg-box.linked .dg-box-head { background: #f6f2e8; }
+.dg-box-head .dg-sub { font-weight: 400; font-size: 11px; color: #889; margin-left: auto; }
+.dg-box.primary .dg-box-head .dg-sub { color: #c8dff5; }
+.dg-primary-btn { border: none; background: none; color: #667; cursor: pointer; font-size: 11px; padding: 0; text-decoration: underline; }
+.dg-box-cols {
+  height: 240px; min-height: 60px; max-height: 600px;
+  overflow-y: auto; resize: vertical; padding: 4px 0;
+}
+.dg-col {
+  display: flex; align-items: center; gap: 6px; padding: 2px 10px;
+  font-size: 12.5px; line-height: 1.9; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.dg-col input[type="checkbox"] { width: 14px; height: 14px; flex-shrink: 0; }
+.dg-col .dg-key-toggle {
+  border: none; background: none; cursor: pointer; padding: 0 2px; font-size: 14px;
+  color: #c4c9d0; flex-shrink: 0;
+}
+.dg-col .dg-key-toggle.on { color: #ba7517; }
+.dg-col .dg-key-toggle:disabled { visibility: hidden; }
+.dg-col-name { overflow: hidden; text-overflow: ellipsis; }
+.dg-col.linkable { cursor: pointer; }
+.dg-col.link-pending { background: #fdf3e2; outline: 1px dashed #ba7517; }
+.dg-badge {
+  display: block; margin: 4px 8px; padding: 3px 8px; border-radius: 4px;
+  background: #fff8e1; border: 1px solid #f0c040; color: #5a4000; font-size: 11px; white-space: normal;
+}
+
+/* ── Criteria grid ── */
+.bld-grid-scroll { overflow-x: auto; }
+.bld-grid { border-collapse: collapse; font-size: 12.5px; width: 100%; table-layout: auto; }
+.bld-grid.resizable { table-layout: fixed; }
+.bld-grid th {
+  text-align: left; padding: 5px 10px; background: #eef1f5; color: #445;
+  font-weight: 600; border-bottom: 1px solid #d8dce1; white-space: nowrap;
+  position: relative; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* Column resize handle (same pattern as option_c.css's results table) */
+.bld-grid .col-resizer {
+  position: absolute; right: 0; top: 0; width: 8px; height: 100%;
+  cursor: col-resize; user-select: none; z-index: 2;
+}
+.bld-grid .col-resizer::after {
+  content: ''; position: absolute; right: 2px; top: 20%; width: 1px; height: 60%;
+  background: #cfd6de;
+}
+.bld-grid .col-resizer:hover::after { right: 2px; width: 2px; height: 100%; top: 0; background: #1a3a5c; }
+.bld-grid th.view-col { text-align: center; cursor: pointer; }
+.bld-grid th.view-col.active { background: #1a3a5c; color: #fff; }
+.bld-grid th.view-col input { width: 92px; border: none; background: transparent; font: inherit; color: inherit; text-align: center; }
+.bld-grid th.view-col.active input { color: #fff; }
+.bld-grid th .view-x { border: none; background: none; cursor: pointer; color: inherit; opacity: 0.6; padding: 0 2px; }
+.bld-grid th .view-x:hover { opacity: 1; }
+.bld-grid td { padding: 4px 10px; border-bottom: 1px solid #eef0f3; white-space: nowrap; }
+.bld-grid td.center { text-align: center; }
+.bld-grid td .grid-key-toggle { border: none; background: none; cursor: pointer; font-size: 14px; color: #c4c9d0; padding: 0; }
+.bld-grid td .grid-key-toggle.on { color: #ba7517; }
+.bld-grid td input[type="text"] { width: 140px; font-size: 12px; padding: 3px 6px; border: 1px solid #ddd; border-radius: 3px; }
+.bld-grid td input[type="checkbox"] { width: 14px; height: 14px; }
+.bld-grid td.sheet-cell { color: #889; font-size: 11.5px; }
+.bld-grid .add-view-btn { border: 1px dashed #a9b4c0; background: none; border-radius: 4px; color: #1a3a5c; cursor: pointer; font-size: 12px; padding: 3px 10px; }
+
+/* ── Summary pane ── */
+.bld-summary-details summary {
+  cursor: pointer; font-size: 12px; color: #667; user-select: none;
+}
+.bld-summary-details summary:hover { color: #1a3a5c; }
+.bld-summary {
+  margin: 8px 0 0; font-family: Consolas, 'Courier New', monospace; font-size: 12px;
+  line-height: 1.8; color: #445; white-space: pre-wrap;
+}
+.bld-summary .kw { color: #1a56c4; }
+
+/* ── Link chips (Phase 4) ── */
+.bld-link-chips { padding: 6px 0 2px; min-height: 0; }
+.bld-link-chip {
+  display: inline-flex; align-items: center; gap: 6px; margin: 2px 6px 2px 0;
+  background: #fdf3e2; border: 1px solid #e8c98a; border-radius: 4px;
+  padding: 2px 8px; font-size: 11.5px; color: #5a4000;
+}
+.bld-link-chip input { width: 90px; font-size: 11px; border: 1px solid #e8c98a; border-radius: 3px; padding: 1px 4px; }
+.bld-link-chip .chip-view { font-size: 11px; border: 1px solid #e8c98a; border-radius: 3px; padding: 1px 2px; background: #fff; }
+.bld-link-chip .chip-x { border: none; background: none; cursor: pointer; color: #5a4000; padding: 0; }
+
+/* ── SQL connection dialog ── */
+.bld-modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 1000;
+  display: flex; align-items: center; justify-content: center;
+}
+.bld-modal {
+  background: #fff; border-radius: 8px; width: 520px; max-width: 92vw;
+  padding: 16px; box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+.bld-modal h3 { margin: 0 0 10px; font-size: 15px; }
+.bld-conn-list { margin-bottom: 14px; font-size: 12px; }
+.bld-conn-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid #eee; }
+.bld-conn-row .conn-actions button { border: none; background: none; cursor: pointer; color: #1a3a5c; text-decoration: underline; font-size: 12px; padding: 0 4px; }
+.bld-conn-row .conn-actions .danger { color: #b00020; }
+.bld-conn-form { border: 1px solid #ddd; padding: 10px 14px; border-radius: 5px; }
+.bld-conn-form legend { font-size: 12px; padding: 0 6px; }
+.bld-conn-status { font-size: 12px; color: #b00020; min-height: 16px; }
+.bld-conn-status.ok { color: #2e7d32; }

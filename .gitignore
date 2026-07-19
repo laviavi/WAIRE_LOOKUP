@@ -11,6 +11,13 @@ waire_lookup/data/
 waire_lookup/lookup_templates/
 waire_lookup/exports/
 waire_lookup/logs/
+waire_lookup/snapshots/
+waire_lookup/source_status.json
+
+# Node / Playwright (frontend e2e)
+node_modules/
+test-results/
+playwright-report/
 
 # Build artifacts
 packaging/build/

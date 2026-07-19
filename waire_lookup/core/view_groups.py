@@ -13,11 +13,15 @@ from dataclasses import dataclass, field
 
 @dataclass
 class ViewGroup:
-    key: str                    # stable identifier: "sheet|table"
+    key: str                    # stable identifier: "sheet|table" (+ join suffix)
     sheet_name: str | None
     table_name: str | None
     views: list[dict] = field(default_factory=list)  # original view dicts
     is_primary: bool = False    # True iff this group matches the template's primary source
+    # Same-workbook merge (left join): when set, this group's base sheet is
+    # left-joined to join_sheet_name on join_on before searching/display.
+    join_sheet_name: str | None = None
+    join_on: list = field(default_factory=list)   # [{"left": col, "right": col}, ...]
 
 
 def _norm(v):
@@ -38,7 +42,7 @@ def group_views_by_source(template: dict) -> list[ViewGroup]:
     Order: primary-source group first, then remaining groups in first-seen order.
     If the template has no views, synthesizes a single primary group from
     result_columns (or all source columns) — matches the existing fallback
-    in do_search.
+    in api_search.
     """
     src = template.get("source", {}) or {}
     primary_sheet = _norm(src.get("sheet_name"))
@@ -47,7 +51,7 @@ def group_views_by_source(template: dict) -> list[ViewGroup]:
 
     views = template.get("views") or []
     if not views:
-        # Synthesize a default view — matches do_search's fallback.
+        # Synthesize a default view — matches api_search's fallback.
         default_cols = template.get("result_columns", [])
         views = [{"name": "Default", "columns": list(default_cols)}]
 
@@ -61,6 +65,23 @@ def group_views_by_source(template: dict) -> list[ViewGroup]:
         # forget the table from the old sheet).
         if v.get("sheet_name") is not None and v.get("table_name") is None:
             vtable = None
+
+        # A merged (left-join) view spans two sheets, so it can't share a
+        # single-sheet bucket — it gets its own group keyed with the join.
+        join = v.get("join") or {}
+        join_sheet = _norm(join.get("sheet_name"))
+        if join_sheet:
+            join_on = join.get("on") or []
+            key = _group_key(vsheet, vtable) + "|JOIN|" + join_sheet
+            if key not in by_key:
+                by_key[key] = ViewGroup(
+                    key=key, sheet_name=vsheet, table_name=vtable, views=[],
+                    is_primary=False, join_sheet_name=join_sheet, join_on=join_on,
+                )
+                order.append(key)
+            by_key[key].views.append(v)
+            continue
+
         key = _group_key(vsheet, vtable)
         if key not in by_key:
             by_key[key] = ViewGroup(

@@ -37,6 +37,16 @@ def _make_big_csv(path: Path, rows: int):
     df.to_csv(path, index=False)
 
 
+def _sse_result(rv) -> dict:
+    """Parse the "result" event out of an /api/search SSE response."""
+    text = rv.data.decode("utf-8")
+    for block in text.split("\n\n"):
+        if block.startswith("event: result"):
+            data_line = next(l for l in block.split("\n") if l.startswith("data: "))
+            return json.loads(data_line[len("data: "):])
+    raise AssertionError(f"no 'result' SSE event in response: {text[:500]!r}")
+
+
 def _write_template(dir_: Path, name: str, csv_path: Path):
     (dir_ / f"{name}.json").write_text(json.dumps({
         "name": name,
@@ -57,10 +67,17 @@ def test_large_search_no_header_explosion(clean_env):
     _write_template(clean_env / "templates", "big", csv)
 
     client = _app.app.test_client()
-    rv = client.post("/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
+    rv = client.post("/api/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
     assert rv.status_code == 200
+    # /api/search streams its body; the generator (where the search actually
+    # runs) only executes once something reads it — status/headers alone
+    # don't force that. _sse_result() reads rv.data, draining it.
+    _sse_result(rv)
 
-    # Every Set-Cookie header must be safely under Chrome's header cap
+    # Every Set-Cookie header must be safely under Chrome's header cap.
+    # (/api/search doesn't write snapshot data to the session at all now — a
+    # streaming response's generator body runs after the cookie header is
+    # already committed, so any such write would silently never take effect.)
     for name, val in rv.headers.items():
         if name.lower() == "set-cookie":
             assert len(val) < 4096, f"Set-Cookie too large: {len(val)} bytes"
@@ -77,8 +94,9 @@ def test_export_returns_all_matches(clean_env):
     _write_template(clean_env / "templates", "big", csv)
 
     client = _app.app.test_client()
-    client.post("/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
-    rv = client.post("/export", data={})
+    rv = client.post("/api/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
+    sid = next(iter(_sse_result(rv)["snapshot_ids"].values()))
+    rv = client.post("/export", data={"snapshot_id": sid})
     assert rv.status_code == 200
     text = rv.data.decode("utf-8-sig")
     # Header line + 5000 rows
@@ -86,21 +104,46 @@ def test_export_returns_all_matches(clean_env):
     assert line_count >= 5000
 
 
-def test_second_search_replaces_prior_snapshot(clean_env):
+def test_second_search_creates_a_new_snapshot(clean_env):
+    """Two searches produce two distinct snapshot ids. (Each search's own
+    snapshot is cleaned up when the *next* search starts — see ajaxSearch()'s
+    prev_snapshot_ids — which this Python-only test can't exercise; disk-level
+    cleanup is covered by core/snapshot_store.py's TTL sweep instead.)"""
     import app as _app
     csv = clean_env / "big.csv"
     _make_big_csv(csv, 100)
     _write_template(clean_env / "templates", "big", csv)
 
     client = _app.app.test_client()
-    client.post("/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
-    snaps1 = set(p.name for p in (clean_env / "snapshots").glob("*.json"))
-    assert len(snaps1) == 1
+    rv1 = client.post("/api/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
+    sid1 = next(iter(_sse_result(rv1)["snapshot_ids"].values()))
 
-    client.post("/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
-    snaps2 = set(p.name for p in (clean_env / "snapshots").glob("*.json"))
-    assert len(snaps2) == 1
-    assert snaps2 != snaps1  # replaced, not appended
+    rv2 = client.post("/api/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
+    sid2 = next(iter(_sse_result(rv2)["snapshot_ids"].values()))
+
+    assert sid1 != sid2
+    assert (clean_env / "snapshots" / f"{sid1}.json").exists()
+    assert (clean_env / "snapshots" / f"{sid2}.json").exists()
+
+
+def test_search_deletes_prev_snapshot_ids_sent_by_client(clean_env):
+    """The client tracks its own snapshot ids and sends them back on the next
+    search so the server can delete them (see ajaxSearch()'s prev_snapshot_ids)."""
+    import app as _app
+    csv = clean_env / "big.csv"
+    _make_big_csv(csv, 100)
+    _write_template(clean_env / "templates", "big", csv)
+
+    client = _app.app.test_client()
+    rv1 = client.post("/api/search", data={"template": "big", "key_0": "Los", "mode": "partial"})
+    sid1 = next(iter(_sse_result(rv1)["snapshot_ids"].values()))
+    assert (clean_env / "snapshots" / f"{sid1}.json").exists()
+
+    client.post("/api/search", data={
+        "template": "big", "key_0": "Los", "mode": "partial",
+        "prev_snapshot_ids": json.dumps([sid1]),
+    })
+    assert not (clean_env / "snapshots" / f"{sid1}.json").exists()
 
 
 def test_export_without_snapshot_redirects(clean_env):
@@ -157,10 +200,17 @@ def test_column_values_returns_filtered_results(clean_env):
     assert json.loads(rv.data) == []
 
 
-def test_index_script_has_no_html_entities(clean_env):
-    """Regression: Jinja auto-escape must not produce &#34; or &amp; inside
-    the inline <script> block. That broke all JS (autocomplete, view-switching)
-    on the no-result page."""
+def test_index_loads_search_js_with_correct_data_attributes(clean_env):
+    """Regression (superseded by the Phase-4 JS extraction): the app used to
+    have Jinja values interpolated directly into an inline <script> block,
+    where auto-escaping produced HTML entities (&#34;, &amp;, ...) that broke
+    the JS outright. All results/behavior now live in static/search.js,
+    loaded via <script src>, with the page's only remaining dynamic JS
+    inputs (auto_run, notify_webhook_id) passed through ordinary — and
+    therefore correctly HTML-escaped — data-* attributes on <body>, not
+    interpolated into script content at all. This test checks the new
+    invariant: search.js is referenced, and the data-* values round-trip
+    without being mangled."""
     import app as _app
     csv = clean_env / "ac.csv"
     pd.DataFrame({"City": ["LA"]}).to_csv(csv, index=False)
@@ -178,14 +228,9 @@ def test_index_script_has_no_html_entities(clean_env):
     assert rv.status_code == 200
     html = rv.data.decode("utf-8")
 
-    # Extract the inline script block
-    start = html.find("<script>")
-    end = html.find("</script>", start)
-    assert start >= 0 and end > start
-    script = html[start:end]
+    assert '<script src="/static/search.js' in html
+    assert 'data-auto-run="false"' in html
+    assert 'data-notify-webhook-id=""' in html
 
-    # Must contain no HTML-escaped characters
-    assert "&#34;" not in script, "double-quote was HTML-escaped in inline script"
-    assert "&amp;" not in script, "&amp; found in inline script"
-    assert "&lt;" not in script, "&lt; found in inline script"
-    assert "&gt;" not in script, "&gt; found in inline script"
+    rv2 = client.get("/?template=ac&key_0=LA&mode=exact&run=1")
+    assert 'data-auto-run="true"' in rv2.data.decode("utf-8")

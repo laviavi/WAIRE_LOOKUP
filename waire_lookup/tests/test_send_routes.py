@@ -86,10 +86,19 @@ def test_send_excel_empty_payload_400(clean_env):
     assert "Nothing selected" in rv.get_json()["error"]
 
 
-def test_send_excel_downloads_generated_workbook(clean_env):
-    import io
-    import openpyxl
+def test_send_excel_opens_workbook(clean_env, monkeypatch):
+    """/api/send/excel opens the workbook directly in Excel via COM (temp
+    file, core/send_excel.open_in_excel) — no browser download anymore."""
     import app as _app
+    from core import send_excel
+    captured = {}
+
+    def fake_open_in_excel(columns, rows):
+        captured["columns"] = columns
+        captured["rows"] = rows
+
+    monkeypatch.setattr(send_excel, "open_in_excel", fake_open_in_excel)
+
     client = _app.app.test_client()
     rv = client.post("/api/send/excel", json={
         "template": "costar",
@@ -97,11 +106,9 @@ def test_send_excel_downloads_generated_workbook(clean_env):
         "rows": [["0012345", "Corona"]],
     })
     assert rv.status_code == 200
-    assert "attachment" in rv.headers.get("Content-Disposition", "")
-    wb = openpyxl.load_workbook(io.BytesIO(rv.data))
-    ws = wb.active
-    assert [c.value for c in ws[1]] == ["PropertyID", "City"]
-    assert [c.value for c in ws[2]] == ["0012345", "Corona"]
+    assert rv.get_json()["ok"] is True
+    assert captured["columns"] == ["PropertyID", "City"]
+    assert captured["rows"] == [["0012345", "Corona"]]
 
 
 def test_deep_link_prefill_and_auto_run(clean_env):
@@ -112,13 +119,16 @@ def test_deep_link_prefill_and_auto_run(clean_env):
 
     client = _app.app.test_client()
 
+    # The auto-run trigger is a runtime check in static/search.js
+    # (`document.body.dataset.autoRun === 'true'`), not a conditionally-
+    # rendered inline snippet — the page's only signal is data-auto-run.
     rv = client.get("/?template=ac&key_0=abc&mode=partial")
     assert rv.status_code == 200
     html = rv.data.decode("utf-8")
     assert ">abc</textarea>" in html
-    assert 'selected>Partial' in html
-    assert "replaceState" not in html  # no run=1 -> no auto-run snippet
+    assert 'selected>Contains (* ? wildcards)' in html
+    assert 'data-auto-run="false"' in html  # no run=1 -> no auto-run
 
     rv2 = client.get("/?template=ac&key_0=abc&mode=partial&run=1")
     html2 = rv2.data.decode("utf-8")
-    assert "replaceState" in html2  # auto-run block present
+    assert 'data-auto-run="true"' in html2  # auto-run signaled

@@ -48,9 +48,9 @@ def test_export_csv_includes_not_found(tmp_path, monkeypatch):
     from app import app
     app.config["TESTING"] = True
     with app.test_client() as c:
-        with c.session_transaction() as sess:
-            sess["snapshot_ids"] = {"primary": sid}
-        r = c.post("/export", data={"group_key": "primary"})
+        # /export takes the snapshot id explicitly now (not via session — see
+        # api_search's comment on why a mid-stream session write never persists).
+        r = c.post("/export", data={"group_key": "primary", "snapshot_id": sid})
         assert r.status_code == 200
         text = r.data.decode("utf-8-sig")
         assert "NOT FOUND" in text

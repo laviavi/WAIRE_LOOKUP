@@ -92,6 +92,29 @@ def test_validate_passes_when_columns_present():
     assert problems == []
 
 
+def test_validate_key_on_secondary_sheet_not_flagged():
+    """A key column that only exists on a non-primary sheet (multi-sheet
+    template, schema v4) must not be flagged just because it's absent from
+    the primary source's columns — available_columns is primary-only."""
+    from core.templates_store import validate_template
+    t = make_template(
+        key_columns=["ID", "Address"],
+        views=[
+            {"name": "Main", "columns": ["ID", "Name"]},
+            {"name": "Other", "sheet_name": "Sheet2", "columns": ["Address", "Notes"]},
+        ],
+    )
+    problems = validate_template(t, available_columns=["ID", "Name"])
+    assert problems == []
+
+
+def test_validate_key_missing_on_single_sheet_still_flagged():
+    from core.templates_store import validate_template
+    t = make_template(key_columns=["ID", "Ghost"])
+    problems = validate_template(t, available_columns=["ID", "Name"])
+    assert any("Ghost" in p for p in problems)
+
+
 def test_malformed_json_skipped(tmp_path, monkeypatch):
     import config
     monkeypatch.setattr(config, "LOOKUP_TEMPLATES_DIR", tmp_path)

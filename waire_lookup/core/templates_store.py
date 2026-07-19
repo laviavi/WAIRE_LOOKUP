@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import config
+from .view_groups import group_views_by_source
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +16,10 @@ SCHEMA_VERSION = 4
 #       different sheet/table in the SAME workbook (source.path/url unchanged).
 #       Omitted → the view uses the template's primary source sheet/table.
 #       v3 templates on disk keep working unchanged (per-view overrides absent).
+#       A view may also carry join: {sheet_name, on:[{left,right}]} to LEFT JOIN
+#       a second sheet of the same workbook (merged view — see core/join.py);
+#       the template carries sheet_joins:[{left_sheet,right_sheet,on}] for the
+#       declared joins so the builder round-trips them on edit.
 
 
 def _slug(name: str) -> str:
@@ -67,13 +72,23 @@ def validate_template(t: dict, available_columns: list[str] | None = None) -> li
 
     if available_columns is not None:
         col_set = set(available_columns)
+        # available_columns is always the PRIMARY source's columns only. A
+        # multi-sheet template (schema v4) can have keys and view columns that
+        # live on a different sheet entirely, which this check has no way to
+        # verify cheaply — so only enforce it when there's nowhere else a
+        # column could legitimately be hiding (a single-sheet template).
+        groups = group_views_by_source(t)
+        single_sheet = len(groups) <= 1
         for col in key_columns:
-            if col not in col_set:
+            if col not in col_set and single_sheet:
                 problems.append(f"Key column '{col}' not found in source (columns may have been renamed).")
         check_cols = []
         if views:
+            primary_group = next((g for g in groups if g.is_primary), None)
+            primary_views = primary_group.views if primary_group else views
             for v in views:
-                check_cols.extend(v.get("columns", []))
+                if v in primary_views:
+                    check_cols.extend(v.get("columns", []))
         else:
             check_cols = result_columns
         for col in check_cols:

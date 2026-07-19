@@ -23,6 +23,7 @@ from core import logger as log
 from core import snapshot_store, source_status
 from core.view_groups import group_views_by_source, ViewGroup
 from core.fileio import friendly_read_error, is_csv, read_shared_bytes
+from core.join import left_join as join_left_merge
 from core.normalize import normalize_key, parse_values
 from core.poller import start_poller
 from core.search import search
@@ -163,6 +164,15 @@ def _format_col_list(cols: list[str]) -> str:
     return ", ".join(cols[:-1]) + f", and {cols[-1]}"
 
 
+def _key_col_header(column_queries: list, labels: dict) -> str:
+    """Header for the match column: the searched field's name when exactly one
+    field was used, otherwise 'Match' (multiple fields → composite match string)."""
+    if len(column_queries) == 1:
+        col = column_queries[0][0]
+        return labels.get(col, col)
+    return "Match"
+
+
 def _search_summary(template: dict | None) -> str:
     if not template:
         return ""
@@ -226,205 +236,11 @@ def index():
         selected=selected,
         selected_name=selected_name,
         warnings=warnings,
-        result=None,
         auto_check=auto_check,
         form_key_values=form_key_values,
         form_mode=form_mode,
         search_summary=_search_summary(selected),
         auto_run=auto_run,
-    )
-
-
-@app.route("/search", methods=["POST"])
-def do_search():
-    template_name = request.form.get("template", "")
-    mode = request.form.get("mode", "exact")
-    auto_check = session.get("auto_check", False)
-
-    templates = list_templates()
-    warnings = []
-    result_data = None
-    selected = None
-    form_key_values: list[str] = []
-
-    try:
-        template = load_template(template_name)
-        selected = template
-        force_reload = request.form.get("force_reload") == "1"
-        key_columns = template["key_columns"]
-        labels = template.get("labels", {})
-
-        # ── Read the search inputs once (identical across all view groups) ──
-        column_queries: list[tuple[str, list[str]]] = []
-        form_key_values = []
-        for i, col in enumerate(key_columns):
-            raw = request.form.get(f"key_{i}", "")
-            form_key_values.append(raw)
-            vals = parse_values(raw)
-            if vals:
-                column_queries.append((col, vals))
-
-        # ── Group views by (sheet, table). One search() per group. ──
-        groups = group_views_by_source(template)
-
-        # Clear the prior search's snapshots.
-        old_sids = session.pop("snapshot_ids", None) or {}
-        # Legacy single-snapshot key too (from pre-v4 layout)
-        legacy_sid = session.pop("snapshot_id", None)
-        if legacy_sid:
-            old_sids["_legacy"] = legacy_sid
-        for sid in old_sids.values():
-            if sid:
-                snapshot_store.delete_snapshot(sid)
-
-        new_snapshot_ids: dict[str, str] = {}
-        group_results: list[dict] = []
-        primary_source = None
-        primary_warnings: list[str] = []
-
-        t0 = time.monotonic()
-        for group in groups:
-            source = _get_view_group_source(template, group)
-            if group.is_primary:
-                primary_source = source
-
-            if force_reload or (auto_check and source.is_stale()):
-                source.load()
-            _ensure_loaded(source)
-
-            df = source.dataframe.copy()
-            df = _apply_default_filter(df, template)
-
-            # Sanity: does this group's sheet have every key column?
-            missing_keys = [c for c in key_columns if c not in df.columns]
-
-            if missing_keys:
-                # Skip this group's search entirely — render disabled.
-                group_results.append({
-                    "group_key": group.key,
-                    "sheet_name": group.sheet_name,
-                    "table_name": group.table_name,
-                    "is_primary": group.is_primary,
-                    "views": group.views,
-                    "disabled_reason": (
-                        f"sheet '{group.sheet_name or '(default)'}' has no "
-                        + ", ".join(f"'{c}'" for c in missing_keys) + " column"
-                    ),
-                    "display_rows": None,
-                    "all_view_cols": [],
-                    "total_matches": 0,
-                    "not_found": [],
-                    "truncated": False,
-                    "source_timestamp": source.source_timestamp().strftime("%Y-%m-%d %H:%M:%S"),
-                })
-                continue
-
-            sr = search(df, column_queries, mode, limit=SEARCH_RESULT_CAP)
-
-            # Union of every column referenced across this group's views.
-            group_all_cols: list[str] = []
-            seen: set[str] = set()
-            for v in group.views:
-                for c in v["columns"]:
-                    if c not in seen:
-                        group_all_cols.append(c)
-                        seen.add(c)
-
-            display_rows = sr.rows.copy()
-            for c in group_all_cols:
-                if c not in display_rows.columns:
-                    display_rows[c] = ""
-            display_rows = display_rows[group_all_cols + ["_matched_on", "_duplicate"]]
-
-            sid = snapshot_store.save_snapshot(
-                sr.full_rows,
-                template_name=f"{template_name}__{group.key}",
-                result_columns=group_all_cols,
-                not_found=sr.not_found,
-            )
-            new_snapshot_ids[group.key] = sid
-
-            group_results.append({
-                "group_key": group.key,
-                "sheet_name": group.sheet_name,
-                "table_name": group.table_name,
-                "is_primary": group.is_primary,
-                "views": group.views,
-                "disabled_reason": None,
-                "display_rows": display_rows,
-                "all_view_cols": group_all_cols,
-                "total_matches": sr.total_matches,
-                "not_found": sr.not_found,
-                "truncated": sr.truncated,
-                "source_timestamp": source.source_timestamp().strftime("%Y-%m-%d %H:%M:%S"),
-            })
-
-            if group.is_primary:
-                primary_warnings = validate_template(template, source.columns())
-
-        duration_ms = int((time.monotonic() - t0) * 1000)
-
-        # Log a single summed line (matches existing single-group behavior for the primary group).
-        primary_result = next(
-            (g for g in group_results if g["is_primary"] and g["disabled_reason"] is None),
-            None,
-        )
-        log.log_search(
-            template_name=template_name,
-            mode=mode,
-            value_count=len(column_queries),
-            match_count=primary_result["total_matches"] if primary_result else 0,
-            not_found=primary_result["not_found"] if primary_result else [],
-            duration_ms=duration_ms,
-        )
-
-        session["snapshot_ids"] = new_snapshot_ids
-
-        card_max = load_settings()["card_max"]
-        primary_total = primary_result["total_matches"] if primary_result else 0
-        view = "cards" if 0 < primary_total <= card_max else "table"
-
-        # Overall not_found = primary group's not_found (search-input-oriented, not per-view).
-        overall_not_found = primary_result["not_found"] if primary_result else []
-        overall_truncated = any(g.get("truncated") for g in group_results)
-
-        # For back-compat with existing template render code (view switcher etc.),
-        # keep the flat `views` list from the primary group as the "default" list.
-        primary_group = next((g for g in group_results if g["is_primary"]), group_results[0])
-        result_data = {
-            "groups": group_results,
-            "primary_group_key": primary_group["group_key"],
-            "views": [                                              # flattened for the tab bar
-                {**v, "group_key": g["group_key"]}
-                for g in group_results for v in g["views"]
-            ],
-            "labels": labels,
-            "total_matches": primary_total,
-            "not_found": overall_not_found,
-            "truncated": overall_truncated,
-            "queried_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source_timestamp": (
-                primary_source.source_timestamp().strftime("%Y-%m-%d %H:%M:%S")
-                if primary_source else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            ),
-            "view": view,
-        }
-        warnings = primary_warnings
-
-    except Exception as e:
-        warnings = [friendly_read_error(e)]
-
-    return render_template(
-        "search_c.html",
-        templates=templates,
-        selected=selected,
-        selected_name=template_name,
-        warnings=warnings,
-        result=result_data,
-        auto_check=auto_check,
-        form_key_values=form_key_values,
-        form_mode=mode,
-        search_summary=_search_summary(selected),
     )
 
 
@@ -443,13 +259,17 @@ def api_search():
             break
         key_raw.append(v)
 
-    # Read/clear session-based snapshots BEFORE entering the generator,
-    # because Flask commits the session cookie with the response headers
-    # (before generator yields run).
-    old_sids = session.pop("snapshot_ids", None) or {}
-    legacy_sid = session.pop("snapshot_id", None)
-    if legacy_sid:
-        old_sids["_legacy"] = legacy_sid
+    # The client sends back the snapshot ids its previous search created (it's
+    # the only thing that still holds them — see the snapshot_ids comment
+    # below) so we can delete them instead of leaving them on disk until the
+    # next TTL sweep.
+    try:
+        prev_snapshot_ids = json.loads(request.form.get("prev_snapshot_ids", "[]"))
+    except (TypeError, ValueError):
+        prev_snapshot_ids = []
+    for sid in prev_snapshot_ids:
+        if sid:
+            snapshot_store.delete_snapshot(sid)
 
     def generate():
         def _evt(event, data):
@@ -473,10 +293,6 @@ def api_search():
             groups = group_views_by_source(template)
             src_name = template.get("source", {}).get("name") or template.get("source", {}).get("path") or template_name
 
-            for sid in old_sids.values():
-                if sid:
-                    snapshot_store.delete_snapshot(sid)
-
             new_snapshot_ids: dict[str, str] = {}
             group_results: list[dict] = []
             primary_source = None
@@ -484,21 +300,55 @@ def api_search():
 
             t0 = time.monotonic()
             for gi, group in enumerate(groups):
-                source = _get_view_group_source(template, group)
-                if group.is_primary:
-                    primary_source = source
+                if group.join_sheet_name:
+                    # Merged view: base sheet LEFT JOIN a second sheet of the
+                    # same workbook. Load both, merge, then search/display the
+                    # combined frame exactly like a normal group.
+                    base_source = _get_source(
+                        template, sheet_name=group.sheet_name,
+                        table_name=group.table_name, _override=True,
+                    )
+                    join_source = _get_source(
+                        template, sheet_name=group.join_sheet_name, _override=True,
+                    )
+                    source = base_source
+                    needs_load = (
+                        force_reload
+                        or (auto_check and (base_source.is_stale() or join_source.is_stale()))
+                        or base_source.dataframe is None or join_source.dataframe is None
+                    )
+                    if needs_load:
+                        yield _evt("status", {"stage": "loading", "detail": f"Loading {src_name}…"})
+                        base_source.load()
+                        join_source.load()
+                    df = join_left_merge(
+                        base_source.dataframe, join_source.dataframe,
+                        group.join_on, group.join_sheet_name,
+                    )
+                    yield _evt("status", {"stage": "searching", "detail": f"Searching {len(df):,} rows…"})
+                    df = _apply_default_filter(df, template)
+                else:
+                    source = _get_view_group_source(template, group)
+                    if group.is_primary:
+                        primary_source = source
 
-                needs_load = force_reload or (auto_check and source.is_stale()) or source.dataframe is None
-                if needs_load:
-                    yield _evt("status", {"stage": "loading", "detail": f"Loading {src_name}…"})
-                    source.load()
+                    needs_load = force_reload or (auto_check and source.is_stale()) or source.dataframe is None
+                    if needs_load:
+                        yield _evt("status", {"stage": "loading", "detail": f"Loading {src_name}…"})
+                        source.load()
 
-                yield _evt("status", {"stage": "searching", "detail": f"Searching {len(source.dataframe):,} rows…"})
+                    yield _evt("status", {"stage": "searching", "detail": f"Searching {len(source.dataframe):,} rows…"})
 
-                df = source.dataframe.copy()
-                df = _apply_default_filter(df, template)
+                    df = source.dataframe.copy()
+                    df = _apply_default_filter(df, template)
 
-                missing_keys = [c for c in key_columns if c not in df.columns]
+                # Only flag a sheet as unsearchable for columns actually being
+                # queried this search — a sheet lacking one configured key
+                # (e.g. PropertyID) is still fully searchable by another
+                # (e.g. Address) as long as that column exists here and the
+                # user filled it in.
+                queried_cols = [c for c, _ in column_queries]
+                missing_keys = [c for c in queried_cols if c not in df.columns]
                 if missing_keys:
                     group_results.append({
                         "group_key": group.key, "sheet_name": group.sheet_name,
@@ -525,7 +375,7 @@ def api_search():
                 for c in group_all_cols:
                     if c not in display_rows.columns:
                         display_rows[c] = ""
-                display_rows = display_rows[group_all_cols + ["_matched_on", "_duplicate"]]
+                display_rows = display_rows[group_all_cols + ["_matched_on", "_duplicate", "_card_title"]]
 
                 sid = snapshot_store.save_snapshot(
                     sr.full_rows, template_name=f"{template_name}__{group.key}",
@@ -538,6 +388,7 @@ def api_search():
                     r = {c: row[c] for c in group_all_cols}
                     r["_matched_on"] = row["_matched_on"]
                     r["_duplicate"] = bool(row["_duplicate"])
+                    r["_card_title"] = row["_card_title"]
                     rows_json.append(r)
 
                 group_results.append({
@@ -565,8 +416,6 @@ def api_search():
                 not_found=primary_result["not_found"] if primary_result else [],
                 duration_ms=duration_ms,
             )
-
-            session["snapshot_ids"] = new_snapshot_ids
 
             card_max = load_settings()["card_max"]
             primary_total = primary_result["total_matches"] if primary_result else 0
@@ -599,7 +448,7 @@ def api_search():
                 "duration_ms": duration_ms,
             }
 
-            key_col_header = key_columns[0] if len(key_columns) == 1 else "Match"
+            key_col_header = _key_col_header(column_queries, labels)
 
             yield _evt("status", {"stage": "rendering", "detail": "Rendering results…"})
             yield _evt("result", {
@@ -607,6 +456,12 @@ def api_search():
                 "warnings": primary_warnings,
                 "key_col_header": key_col_header,
                 "template_name": template_name,
+                "links": template.get("links", []),
+                # Session writes inside this generator never reach the client:
+                # Flask commits the session cookie header before a streaming
+                # response's body runs. Send snapshot ids in-band instead; the
+                # client passes them explicitly to /api/more_rows and /export.
+                "snapshot_ids": new_snapshot_ids,
             })
 
         except Exception as e:
@@ -631,14 +486,12 @@ def do_refresh():
 
 @app.route("/export", methods=["POST"])
 def do_export():
-    # Multi-group snapshots (v4): the active group is passed via form field.
-    group_key = request.form.get("group_key", "")
-    sids = session.get("snapshot_ids") or {}
-    sid = sids.get(group_key) or session.get("snapshot_id")  # fallback for legacy sessions
-    if not sid and sids:
-        # No specific group requested — pick the first available.
-        sid = next(iter(sids.values()))
-    snap = snapshot_store.load_snapshot(sid)
+    # The search response returns snapshot ids in-band (not via the session —
+    # Flask commits the session cookie before a streaming response's generator
+    # body runs, so a mid-stream session write is silently lost). The client
+    # holds them and sends the active group's id explicitly.
+    sid = request.form.get("snapshot_id", "")
+    snap = snapshot_store.load_snapshot(sid) if sid else None
     if snap is None:
         return redirect(url_for("index"))
 
@@ -875,11 +728,17 @@ def api_cross_search():
 
 @app.route("/api/more_rows")
 def api_more_rows():
-    group_key = request.args.get("group_key", "")
+    """Return one page of a group's full snapshot. Rows are shaped exactly like
+    the initial SSE payload's display_rows (flat {col: value, ...} dicts plus
+    _matched_on/_duplicate/_card_title) so the client can render a page fetched
+    here with the exact same code path as the first page."""
     offset = int(request.args.get("offset", 0))
     limit = int(request.args.get("limit", SEARCH_RESULT_CAP))
-    sids = session.get("snapshot_ids") or {}
-    sid = sids.get(group_key)
+    # The search response returns snapshot ids in-band (not via the session —
+    # Flask commits the session cookie before a streaming response's generator
+    # body runs, so a mid-stream session write is silently lost). The client
+    # holds them and sends the active group's id explicitly.
+    sid = request.args.get("snapshot_id", "")
     if not sid:
         return jsonify({"error": "Results expired — run the search again."}), 410
     snap = snapshot_store.load_snapshot(sid)
@@ -890,8 +749,11 @@ def api_more_rows():
     sl = df.iloc[offset:offset + limit]
     rows = []
     for _, r in sl.iterrows():
-        vals = [str(r[c]) if c in r.index and pd.notna(r[c]) else "" for c in result_columns]
-        rows.append(vals)
+        row = {c: (str(r[c]) if c in r.index and pd.notna(r[c]) else "") for c in result_columns}
+        row["_matched_on"] = str(r["_matched_on"]) if "_matched_on" in r.index else ""
+        row["_duplicate"] = bool(r["_duplicate"]) if "_duplicate" in r.index else False
+        row["_card_title"] = str(r["_card_title"]) if "_card_title" in r.index else ""
+        rows.append(row)
     return jsonify({
         "rows": rows,
         "columns": result_columns,
@@ -1028,10 +890,14 @@ def _tables_for_sheet_from_zip(file_bytes: bytes, sheet_name: str | None) -> lis
                         if "/tables/" in target:
                             table_files.append(target.split("/")[-1])
 
-        # Read each table XML for its display name
+        # Read each table XML for its display name. The all-tables fallback
+        # only applies when NO sheet was requested — a specific sheet with an
+        # empty table_files legitimately has zero tables (previously this
+        # misreported every table in the workbook for such sheets).
+        list_all = not table_files and target_sheet_file is None
         for fname in names:
             if fname.startswith("xl/tables/") and fname.endswith(".xml"):
-                if fname.split("/")[-1] in table_files or not table_files:
+                if fname.split("/")[-1] in table_files or list_all:
                     with zf.open(fname) as f:
                         root = ET.parse(f).getroot()
                         nm = root.get("displayName") or root.get("name", "")
@@ -1081,6 +947,42 @@ def _table_columns_from_zip(file_bytes: bytes, table_name: str) -> list[str]:
     raise ValueError(f"Table '{table_name}' not found in workbook")
 
 
+@app.route("/api/workbook_map", methods=["POST"])
+def api_workbook_map():
+    """One-shot metadata map for the builder diagram pane: every sheet with its
+    Excel Tables and header-row columns. One read_shared_bytes call, one ZIP
+    pass per lookup — vs N /api/columns round trips (each re-reading the file,
+    which on a locked/OneDrive workbook means a full temp copy per call)."""
+    data = request.json or {}
+    path = data.get("path", "")
+    header_row = _header_row_to_pandas(data.get("header_row", 1))
+    try:
+        file_bytes = read_shared_bytes(path)
+        if is_csv(path):
+            df = pd.read_csv(io.BytesIO(file_bytes), header=header_row, nrows=0, dtype=str)
+            return jsonify({
+                "is_csv": True,
+                "sheets": [{"name": None, "columns": list(df.columns), "tables": []}],
+            })
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+        sheet_names = wb.sheetnames
+        wb.close()
+        # All sheet headers in a single pandas call (dict of empty frames).
+        headers = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None,
+                                header=header_row, nrows=0, dtype=str)
+        sheets = []
+        for name in sheet_names:
+            cols = list(headers[name].columns) if name in headers else []
+            tables = []
+            for tname in _tables_for_sheet_from_zip(file_bytes, name):
+                tables.append({"name": tname,
+                               "columns": _table_columns_from_zip(file_bytes, tname)})
+            sheets.append({"name": name, "columns": cols, "tables": tables})
+        return jsonify({"is_csv": False, "sheets": sheets})
+    except Exception as e:
+        return jsonify({"error": friendly_read_error(e)}), 400
+
+
 @app.route("/api/template_export")
 def api_template_export():
     name = request.args.get("template", "")
@@ -1128,6 +1030,21 @@ def api_template_import():
         return jsonify({"ok": True, "name": name})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/template_keys", methods=["GET"])
+def api_template_keys():
+    """Return key columns and view names for a named template (used by the
+    link builder — views let a cross-template link target a specific view)."""
+    name = request.args.get("name", "")
+    if not name:
+        return jsonify({"keys": [], "views": []})
+    try:
+        tpl = load_template(name)
+        views = [v.get("name", "") for v in (tpl.get("views") or []) if v.get("name")]
+        return jsonify({"keys": tpl.get("key_columns", []), "views": views})
+    except Exception:
+        return jsonify({"keys": [], "views": []})
 
 
 @app.route("/api/save_template", methods=["POST"])
@@ -1189,20 +1106,15 @@ def api_send_outlook():
 
 @app.route("/api/send/excel", methods=["POST"])
 def api_send_excel():
-    """Generate a fresh .xlsx of the sent rows and return it for download.
-    Does not look for or append to any existing workbook — the user saves
-    it themselves if they want to keep it."""
+    """Generate a fresh .xlsx of the sent rows and open it directly in Excel
+    (temp file + COM) — no browser download, no manual re-opening. Never
+    looks for or appends to any existing workbook."""
     from core import send_excel
     try:
         template, columns, rows, _deep_link, _data = _parse_send_payload()
-        xlsx_bytes = send_excel.build_workbook(columns, rows)
+        send_excel.open_in_excel(columns, rows)
         log.log_send("excel", template, len(rows))
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in template) or "export"
-        return send_file(
-            io.BytesIO(xlsx_bytes), as_attachment=True, download_name=f"{safe_name}_{ts}.xlsx",
-            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+        return jsonify({"ok": True})
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:
